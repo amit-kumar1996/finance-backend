@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler } from "express";
 import { ZodError } from "zod";
 import { logger } from "../lib/logger.js";
+import { HttpError } from "../lib/http-error.js";
 
 export const errorHandler: ErrorRequestHandler = (
   error: unknown,
@@ -15,6 +16,13 @@ export const errorHandler: ErrorRequestHandler = (
         message: "The request did not match the expected format.",
         details: error.issues.map(({ path, message }) => ({ path, message })),
       },
+    });
+    return;
+  }
+
+  if (error instanceof HttpError) {
+    response.status(error.status).json({
+      error: { code: error.code, message: error.message },
     });
     return;
   }

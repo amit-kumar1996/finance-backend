@@ -2,10 +2,31 @@ import { createApp } from "./app.js";
 import { env } from "./config/env.js";
 import { logger } from "./lib/logger.js";
 import { prisma } from "./lib/prisma.js";
+import { AuthService } from "./modules/auth/auth.service.js";
+import { PrismaAuthRepository } from "./modules/auth/prisma-auth.repository.js";
+import { SimpleWebAuthnDriver } from "./modules/auth/simplewebauthn.driver.js";
+import { createAuthRouter } from "./modules/auth/auth.routes.js";
 
-const app = createApp(async () => {
-  await prisma.$queryRaw`SELECT 1`;
-});
+const authConfig = {
+  rpId: env.WEBAUTHN_RP_ID,
+  rpName: env.WEBAUTHN_RP_NAME,
+  webOrigin: env.WEB_ORIGIN,
+  setupToken: env.SETUP_TOKEN,
+  challengeTtlSeconds: env.AUTH_CHALLENGE_TTL_SECONDS,
+  sessionTtlHours: env.AUTH_SESSION_TTL_HOURS,
+};
+const authService = new AuthService(
+  new PrismaAuthRepository(prisma),
+  new SimpleWebAuthnDriver(authConfig),
+  authConfig,
+);
+
+const app = createApp(
+  async () => {
+    await prisma.$queryRaw`SELECT 1`;
+  },
+  createAuthRouter(authService, authConfig, env.NODE_ENV === "production"),
+);
 
 const server = app.listen(env.API_PORT, env.API_HOST, () => {
   logger.info({ host: env.API_HOST, port: env.API_PORT }, "API listening");

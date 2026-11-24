@@ -7,14 +7,29 @@ import { env } from "./config/env.js";
 import { errorHandler } from "./middleware/error-handler.js";
 import { logger } from "./lib/logger.js";
 import { createHealthRouter, type DatabaseCheck } from "./routes/health.js";
+import type { Router } from "express";
 
-export const createApp = (checkDatabase: DatabaseCheck): Express => {
+export const createApp = (checkDatabase: DatabaseCheck, authRouter?: Router): Express => {
   const app = express();
 
   app.disable("x-powered-by");
+  if (env.NODE_ENV === "production") app.set("trust proxy", 1);
   app.use(helmet());
   app.use(cors({ origin: env.WEB_ORIGIN, credentials: true }));
-  app.use(pinoHttp({ logger }));
+  app.use(
+    pinoHttp({
+      logger,
+      redact: {
+        paths: [
+          "req.headers.cookie",
+          "req.headers.x-setup-token",
+          "req.headers.x-csrf-token",
+          "res.headers.set-cookie",
+        ],
+        censor: "[REDACTED]",
+      },
+    }),
+  );
   app.use(express.json({ limit: "100kb" }));
   app.use(
     "/api/v1/auth",
@@ -30,6 +45,7 @@ export const createApp = (checkDatabase: DatabaseCheck): Express => {
       },
     }),
   );
+  if (authRouter) app.use("/api/v1/auth", authRouter);
   app.use("/api/v1", createHealthRouter(checkDatabase));
   app.use((_request, response) => {
     response.status(404).json({
