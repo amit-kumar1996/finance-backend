@@ -1,6 +1,6 @@
 # Personal Finance Manager API
 
-This folder is an independent npm project for the Express and Prisma API. Its local Compose file starts MySQL on loopback only (`127.0.0.1:3306`); it does not publish MySQL to the network.
+This folder is an independent npm project for the Express and Prisma API. Its local Compose file starts MySQL on loopback only (`127.0.0.1:3307` on Windows, forwarded to container port `3306`); it does not publish MySQL to the network.
 
 ## Local development
 

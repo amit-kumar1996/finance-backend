@@ -4,7 +4,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "docker compose up -d --wait mysql && npm run db:generate && npm run db:deploy && concurrently --kill-others -n api -c green \"tsx watch src/server.ts\"",
+    "dev": "docker compose up -d --wait mysql && npm run db:generate && npm run db:deploy && tsc -p tsconfig.build.json && concurrently --kill-others -n api,build -c green,blue \"node --watch dist/server.js\" \"tsc -p tsconfig.build.json --watch --preserveWatchOutput\"",
     "build": "npm run db:generate && tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "type-check": "npm run db:generate && tsc -p tsconfig.json --noEmit",
