@@ -9,7 +9,11 @@ import { logger } from "./lib/logger.js";
 import { createHealthRouter, type DatabaseCheck } from "./routes/health.js";
 import type { Router } from "express";
 
-export const createApp = (checkDatabase: DatabaseCheck, authRouter?: Router): Express => {
+export const createApp = (
+  checkDatabase: DatabaseCheck,
+  authRouter?: Router,
+  accountsRouter?: Router,
+): Express => {
   const app = express();
 
   app.disable("x-powered-by");
@@ -46,6 +50,7 @@ export const createApp = (checkDatabase: DatabaseCheck, authRouter?: Router): Ex
     }),
   );
   if (authRouter) app.use("/api/v1/auth", authRouter);
+  if (accountsRouter) app.use("/api/v1", accountsRouter);
   app.use("/api/v1", createHealthRouter(checkDatabase));
   app.use((_request, response) => {
     response.status(404).json({

@@ -12,15 +12,48 @@ enum AuthChallengePurpose {
   AUTHENTICATION
 }
 
+enum FinancialAccountType {
+  BANK
+  CASH
+  UPI
+  CREDIT_CARD
+}
+
+enum LedgerAccountCategory {
+  ASSET
+  LIABILITY
+  EQUITY
+  INCOME
+  EXPENSE
+}
+
+enum LedgerNormalBalance {
+  DEBIT
+  CREDIT
+}
+
+enum LedgerTransactionSource {
+  OPENING_BALANCE
+  TRANSFER
+  EXPENSE
+  CREDIT_CARD_PURCHASE
+  CREDIT_CARD_PAYMENT
+  REVERSAL
+}
+
 model User {
-  id            String               @id @db.VarChar(30)
-  singleton     Boolean              @unique @default(true)
-  createdAt     DateTime             @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt     DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
-  credentials   WebAuthnCredential[]
-  sessions      AuthSession[]
-  challenges    AuthChallenge[]
-  recoveryCodes RecoveryCode[]
+  id                 String               @id @db.VarChar(30)
+  singleton          Boolean              @unique @default(true)
+  createdAt          DateTime             @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt          DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
+  credentials        WebAuthnCredential[]
+  sessions           AuthSession[]
+  challenges         AuthChallenge[]
+  recoveryCodes      RecoveryCode[]
+  financialAccounts  FinancialAccount[]
+  ledgerAccounts     LedgerAccount[]
+  ledgerTransactions LedgerTransaction[]
+  auditLogs          AuditLog[]
 
   @@map("users")
 }
@@ -83,4 +116,89 @@ model RecoveryCode {
 
   @@index([userId, usedAt])
   @@map("recovery_codes")
+}
+
+model FinancialAccount {
+  id              String               @id @default(cuid()) @db.VarChar(30)
+  userId          String               @map("user_id") @db.VarChar(30)
+  name            String               @db.VarChar(100)
+  accountType     FinancialAccountType @map("account_type")
+  institutionName String?              @map("institution_name") @db.VarChar(100)
+  ledgerAccountId String               @unique @map("ledger_account_id") @db.VarChar(30)
+  idempotencyKey  String               @map("idempotency_key") @db.VarChar(128)
+  requestHash     String               @map("request_hash") @db.Char(64)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt       DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
+  user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerAccount   LedgerAccount        @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, accountType])
+  @@map("financial_accounts")
+}
+
+model LedgerAccount {
+  id               String                @id @default(cuid()) @db.VarChar(30)
+  userId           String                @map("user_id") @db.VarChar(30)
+  code             String                @db.VarChar(40)
+  name             String                @db.VarChar(100)
+  category         LedgerAccountCategory
+  normalBalance    LedgerNormalBalance   @map("normal_balance")
+  isSystem         Boolean               @default(false) @map("is_system")
+  createdAt        DateTime              @default(now()) @map("created_at") @db.DateTime(3)
+  user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  financialAccount FinancialAccount?
+  entries          TransactionEntry[]
+
+  @@unique([userId, code])
+  @@index([userId, category])
+  @@map("ledger_accounts")
+}
+
+model LedgerTransaction {
+  id             String                  @id @default(cuid()) @db.VarChar(30)
+  userId         String                  @map("user_id") @db.VarChar(30)
+  effectiveDate  DateTime                @map("effective_date") @db.Date
+  description    String                  @db.VarChar(250)
+  source         LedgerTransactionSource
+  idempotencyKey String                  @map("idempotency_key") @db.VarChar(128)
+  requestHash    String                  @map("request_hash") @db.Char(64)
+  reversalOfId   String?                 @unique @map("reversal_of_id") @db.VarChar(30)
+  createdAt      DateTime                @default(now()) @map("created_at") @db.DateTime(3)
+  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reversalOf     LedgerTransaction?      @relation("LedgerTransactionReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversedBy     LedgerTransaction?      @relation("LedgerTransactionReversals")
+  entries        TransactionEntry[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, effectiveDate])
+  @@map("ledger_transactions")
+}
+
+model TransactionEntry {
+  id              String            @id @default(cuid()) @db.VarChar(30)
+  transactionId   String            @map("transaction_id") @db.VarChar(30)
+  ledgerAccountId String            @map("ledger_account_id") @db.VarChar(30)
+  debitAmount     Decimal           @default(0) @map("debit_amount") @db.Decimal(18, 2)
+  creditAmount    Decimal           @default(0) @map("credit_amount") @db.Decimal(18, 2)
+  transaction     LedgerTransaction @relation(fields: [transactionId], references: [id], onDelete: Restrict)
+  ledgerAccount   LedgerAccount     @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+
+  @@index([ledgerAccountId, transactionId])
+  @@map("transaction_entries")
+}
+
+model AuditLog {
+  id         String   @id @default(cuid()) @db.VarChar(30)
+  userId     String   @map("user_id") @db.VarChar(30)
+  entityType String   @map("entity_type") @db.VarChar(40)
+  entityId   String   @map("entity_id") @db.VarChar(30)
+  action     String   @db.VarChar(60)
+  changes    Json?
+  createdAt  DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([entityType, entityId])
+  @@map("audit_logs")
 }

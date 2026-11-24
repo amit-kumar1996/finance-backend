@@ -6,6 +6,9 @@ import { AuthService } from "./modules/auth/auth.service.js";
 import { PrismaAuthRepository } from "./modules/auth/prisma-auth.repository.js";
 import { SimpleWebAuthnDriver } from "./modules/auth/simplewebauthn.driver.js";
 import { createAuthRouter } from "./modules/auth/auth.routes.js";
+import { AccountsService } from "./modules/accounts/accounts.service.js";
+import { createAccountsRouter } from "./modules/accounts/accounts.routes.js";
+import { PrismaAccountsRepository } from "./modules/accounts/prisma-accounts.repository.js";
 
 const authConfig = {
   rpId: env.WEBAUTHN_RP_ID,
@@ -20,12 +23,19 @@ const authService = new AuthService(
   new SimpleWebAuthnDriver(authConfig),
   authConfig,
 );
+const accountsService = new AccountsService(new PrismaAccountsRepository(prisma));
 
 const app = createApp(
   async () => {
     await prisma.$queryRaw`SELECT 1`;
   },
   createAuthRouter(authService, authConfig, env.NODE_ENV === "production"),
+  createAccountsRouter(
+    accountsService,
+    authService,
+    authConfig,
+    env.NODE_ENV === "production",
+  ),
 );
 
 const server = app.listen(env.API_PORT, env.API_HOST, () => {
