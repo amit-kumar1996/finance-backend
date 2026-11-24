@@ -9,6 +9,7 @@ import type {
   LedgerTransactionRecord,
   LedgerTransactionSource,
   PostTransactionRepositoryInput,
+  ReplaceExpenseRepositoryResult,
   TransactionEntryRecord,
 } from "./accounts.types.js";
 
@@ -38,6 +39,120 @@ export class AccountsService {
 
   listAccounts(userId: string): Promise<AccountSummary[]> {
     return this.repository.listAccounts(userId);
+  }
+
+  getDefaultExpenseAccount(userId: string): Promise<AccountSummary | null> {
+    return this.repository.getDefaultExpenseAccount(userId);
+  }
+
+  async setDefaultExpenseAccount(
+    userId: string,
+    idempotencyKey: string,
+    accountId: string | null,
+  ): Promise<AccountSummary | null> {
+    const requestHash = fingerprint({ operation: "DEFAULT_EXPENSE_ACCOUNT", accountId });
+    await this.repository.setDefaultExpenseAccount(
+      userId,
+      accountId,
+      idempotencyKey,
+      requestHash,
+    );
+    return this.repository.getDefaultExpenseAccount(userId);
+  }
+
+  async expenseUsingDefault(
+    userId: string,
+    idempotencyKey: string,
+    input: { effectiveDate: string; amount: string; description: string },
+  ): Promise<LedgerTransactionRecord> {
+    const amount = formatMoney(parseMoney(input.amount));
+    const description = input.description.trim();
+    const existing = await this.repository.findTransactionByIdempotencyKey(
+      userId,
+      idempotencyKey,
+    );
+    if (existing) {
+      const existingAmount = existing.entries.reduce(
+        (sum, entry) => sum.plus(entry.debitAmount),
+        parseMoney("0", true),
+      );
+      if (
+        existing.source !== "EXPENSE" ||
+        existing.effectiveDate !== input.effectiveDate ||
+        existing.description !== description ||
+        !existingAmount.equals(amount)
+      ) {
+        throw new HttpError(
+          409,
+          "IDEMPOTENCY_KEY_REUSED",
+          "This idempotency key was already used for different data.",
+        );
+      }
+      return existing;
+    }
+    const account = await this.repository.getDefaultExpenseAccount(userId);
+    if (!account) {
+      throw new HttpError(
+        409,
+        "DEFAULT_EXPENSE_ACCOUNT_REQUIRED",
+        "Choose a default expense account on the Accounts page before adding expenses.",
+      );
+    }
+    return this.expense(userId, idempotencyKey, {
+      ...input,
+      amount,
+      description,
+      accountId: account.id,
+    });
+  }
+
+  async editExpense(
+    userId: string,
+    idempotencyKey: string,
+    transactionId: string,
+    input: { effectiveDate: string; amount: string; description: string },
+  ): Promise<ReplaceExpenseRepositoryResult> {
+    const amount = formatMoney(parseMoney(input.amount));
+    const description = input.description.trim();
+    const requestHash = fingerprint({
+      operation: "EDIT_EXPENSE",
+      transactionId,
+      effectiveDate: input.effectiveDate,
+      amount,
+      description,
+    });
+    const keyDigest = createHash("sha256")
+      .update(`${userId}:${idempotencyKey}`)
+      .digest("hex")
+      .slice(0, 40);
+    return this.repository.replaceExpense({
+      userId,
+      originalTransactionId: transactionId,
+      reversalIdempotencyKey: `EXP_EDIT_${keyDigest}_REV`,
+      replacementIdempotencyKey: `EXP_EDIT_${keyDigest}_NEW`,
+      reversalRequestHash: fingerprint({ requestHash, kind: "REVERSAL" }),
+      requestHash,
+      effectiveDate: input.effectiveDate,
+      description,
+      amount,
+    });
+  }
+
+  async deleteExpense(
+    userId: string,
+    idempotencyKey: string,
+    transactionId: string,
+  ): Promise<LedgerTransactionRecord> {
+    const transaction = await this.repository.findTransaction(userId, transactionId);
+    if (!transaction)
+      throw new HttpError(404, "EXPENSE_NOT_FOUND", "The expense was not found.");
+    if (transaction.source !== "EXPENSE") {
+      throw new HttpError(400, "EXPENSE_REQUIRED", "Only expenses can be deleted here.");
+    }
+    return this.reverse(userId, idempotencyKey, transactionId, {
+      effectiveDate: transaction.effectiveDate,
+      reason: "Expense deleted",
+    });
   }
 
   async createAccount(

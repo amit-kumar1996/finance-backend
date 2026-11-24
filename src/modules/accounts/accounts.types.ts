@@ -80,8 +80,32 @@ export interface PostTransactionRepositoryInput {
   activePersonId?: string;
 }
 
+export interface ReplaceExpenseRepositoryInput {
+  userId: string;
+  originalTransactionId: string;
+  reversalIdempotencyKey: string;
+  replacementIdempotencyKey: string;
+  reversalRequestHash: string;
+  requestHash: string;
+  effectiveDate: string;
+  description: string;
+  amount: string;
+}
+
+export interface ReplaceExpenseRepositoryResult {
+  reversal: LedgerTransactionRecord;
+  transaction: LedgerTransactionRecord;
+}
+
 export interface AccountsRepository {
   listAccounts(userId: string): Promise<AccountSummary[]>;
+  getDefaultExpenseAccount(userId: string): Promise<AccountSummary | null>;
+  setDefaultExpenseAccount(
+    userId: string,
+    accountId: string | null,
+    idempotencyKey: string,
+    requestHash: string,
+  ): Promise<void>;
   getAccount(userId: string, accountId: string): Promise<AccountReference | null>;
   getAccountSummary(userId: string, accountId: string): Promise<AccountSummary | null>;
   findAccountByIdempotencyKey(
@@ -104,4 +128,7 @@ export interface AccountsRepository {
   postTransaction(
     input: PostTransactionRepositoryInput,
   ): Promise<LedgerTransactionRecord>;
+  replaceExpense(
+    input: ReplaceExpenseRepositoryInput,
+  ): Promise<ReplaceExpenseRepositoryResult>;
 }

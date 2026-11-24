@@ -12,6 +12,9 @@ import { PrismaAccountsRepository } from "./modules/accounts/prisma-accounts.rep
 import { PeopleService } from "./modules/people/people.service.js";
 import { PrismaPeopleRepository } from "./modules/people/prisma-people.repository.js";
 import { createPeopleRouter } from "./modules/people/people.routes.js";
+import { ExpensesService } from "./modules/expenses/expenses.service.js";
+import { PrismaExpensesRepository } from "./modules/expenses/prisma-expenses.repository.js";
+import { createExpensesRouter } from "./modules/expenses/expenses.routes.js";
 
 const authConfig = {
   rpId: env.WEBAUTHN_RP_ID,
@@ -31,6 +34,10 @@ const peopleService = new PeopleService(
   new PrismaPeopleRepository(prisma),
   accountsService,
 );
+const expensesService = new ExpensesService(
+  new PrismaExpensesRepository(prisma),
+  accountsService,
+);
 
 const app = createApp(
   async () => {
@@ -45,6 +52,12 @@ const app = createApp(
   ),
   createPeopleRouter(
     peopleService,
+    authService,
+    authConfig,
+    env.NODE_ENV === "production",
+  ),
+  createExpensesRouter(
+    expensesService,
     authService,
     authConfig,
     env.NODE_ENV === "production",

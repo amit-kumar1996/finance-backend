@@ -46,20 +46,22 @@ enum LedgerTransactionSource {
 }
 
 model User {
-  id                 String               @id @db.VarChar(30)
-  singleton          Boolean              @unique @default(true)
-  createdAt          DateTime             @default(now()) @map("created_at") @db.DateTime(3)
-  updatedAt          DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
-  credentials        WebAuthnCredential[]
-  sessions           AuthSession[]
-  challenges         AuthChallenge[]
-  recoveryCodes      RecoveryCode[]
-  financialAccounts  FinancialAccount[]
-  ledgerAccounts     LedgerAccount[]
-  ledgerTransactions LedgerTransaction[]
-  auditLogs          AuditLog[]
-  persons            Person[]
-  idempotencyRecords IdempotencyRecord[]
+  id                      String               @id @db.VarChar(30)
+  singleton               Boolean              @unique @default(true)
+  defaultExpenseAccountId String?              @unique @map("default_expense_account_id") @db.VarChar(30)
+  createdAt               DateTime             @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt               DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
+  credentials             WebAuthnCredential[]
+  sessions                AuthSession[]
+  challenges              AuthChallenge[]
+  recoveryCodes           RecoveryCode[]
+  financialAccounts       FinancialAccount[]
+  ledgerAccounts          LedgerAccount[]
+  ledgerTransactions      LedgerTransaction[]
+  auditLogs               AuditLog[]
+  persons                 Person[]
+  idempotencyRecords      IdempotencyRecord[]
+  defaultExpenseAccount   FinancialAccount?    @relation("DefaultExpenseAccount", fields: [defaultExpenseAccountId], references: [id], onDelete: SetNull)
 
   @@map("users")
 }
@@ -137,6 +139,7 @@ model FinancialAccount {
   updatedAt       DateTime             @updatedAt @map("updated_at") @db.DateTime(3)
   user            User                 @relation(fields: [userId], references: [id], onDelete: Cascade)
   ledgerAccount   LedgerAccount        @relation(fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+  defaultForUser  User?                @relation("DefaultExpenseAccount")
 
   @@unique([userId, idempotencyKey])
   @@index([userId, accountType])

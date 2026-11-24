@@ -14,6 +14,7 @@ import {
   cardPaymentSchema,
   cardPurchaseSchema,
   createAccountSchema,
+  defaultExpenseAccountSchema,
   expenseSchema,
   reversalSchema,
   transferSchema,
@@ -46,6 +47,35 @@ export const createAccountsRouter = (
     const accounts = await service.listAccounts(request.auth!.session.userId);
     response.json({ data: { accounts } });
   });
+
+  router.get(
+    "/preferences/default-expense-account",
+    authenticated,
+    fullSession,
+    async (request, response) => {
+      const account = await service.getDefaultExpenseAccount(
+        request.auth!.session.userId,
+      );
+      response.json({ data: { account } });
+    },
+  );
+
+  router.put(
+    "/preferences/default-expense-account",
+    sameOrigin,
+    authenticated,
+    fullSession,
+    csrf,
+    validateBody(defaultExpenseAccountSchema),
+    async (request, response) => {
+      const account = await service.setDefaultExpenseAccount(
+        request.auth!.session.userId,
+        readIdempotencyKey(request.header("idempotency-key")),
+        request.body.accountId,
+      );
+      response.json({ data: { account } });
+    },
+  );
 
   router.post(
     "/accounts",

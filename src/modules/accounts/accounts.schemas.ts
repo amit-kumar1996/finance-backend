@@ -12,6 +12,10 @@ export const createAccountSchema = z.object({
   effectiveDate: dateString.optional(),
 });
 
+export const defaultExpenseAccountSchema = z.object({
+  accountId: z.string().min(1).max(30).nullable(),
+});
+
 export const transferSchema = z.object({
   fromAccountId: z.string().min(1).max(30),
   toAccountId: z.string().min(1).max(30),

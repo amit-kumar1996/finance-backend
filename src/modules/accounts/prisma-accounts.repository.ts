@@ -2,6 +2,7 @@ import { createHash, randomBytes } from "node:crypto";
 import type { PrismaClient } from "../../generated/prisma/client.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { HttpError } from "../../lib/http-error.js";
+import { assertBalancedEntries } from "./money.js";
 import type {
   AccountReference,
   AccountSummary,
@@ -12,6 +13,8 @@ import type {
   IdempotentResource,
   LedgerTransactionRecord,
   PostTransactionRepositoryInput,
+  ReplaceExpenseRepositoryInput,
+  ReplaceExpenseRepositoryResult,
 } from "./accounts.types.js";
 
 const toDate = (date: string): Date => new Date(`${date}T00:00:00.000Z`);
@@ -61,6 +64,12 @@ const ledgerCategoryFor = (type: FinancialAccountType) =>
 const normalBalanceFor = (type: FinancialAccountType) =>
   type === "CREDIT_CARD" ? "CREDIT" : "DEBIT";
 
+const isUniqueConstraintError = (error: unknown): boolean =>
+  typeof error === "object" &&
+  error !== null &&
+  "code" in error &&
+  error.code === "P2002";
+
 export class PrismaAccountsRepository implements AccountsRepository {
   constructor(private readonly prisma: PrismaClient) {}
 
@@ -108,6 +117,102 @@ export class PrismaAccountsRepository implements AccountsRepository {
         createdAt: account.createdAt,
       };
     });
+  }
+
+  async getDefaultExpenseAccount(userId: string): Promise<AccountSummary | null> {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId },
+      select: { defaultExpenseAccountId: true },
+    });
+    if (!user?.defaultExpenseAccountId) return null;
+    return this.getAccountSummary(userId, user.defaultExpenseAccountId);
+  }
+
+  async setDefaultExpenseAccount(
+    userId: string,
+    accountId: string | null,
+    idempotencyKey: string,
+    requestHash: string,
+  ): Promise<void> {
+    try {
+      await this.prisma.$transaction(async (tx) => {
+        const existing = await tx.idempotencyRecord.findFirst({
+          where: { userId, key: idempotencyKey },
+          select: { requestHash: true },
+        });
+        if (existing) {
+          if (existing.requestHash !== requestHash) {
+            throw new HttpError(
+              409,
+              "IDEMPOTENCY_KEY_REUSED",
+              "This idempotency key was already used for different data.",
+            );
+          }
+          return;
+        }
+        if (accountId) {
+          const account = await tx.financialAccount.findFirst({
+            where: {
+              id: accountId,
+              userId,
+              accountType: { in: ["BANK", "CASH", "UPI"] },
+            },
+            select: { id: true },
+          });
+          if (!account) {
+            throw new HttpError(
+              404,
+              "ACCOUNT_NOT_FOUND",
+              "Choose a bank, cash, or UPI account owned by this user.",
+            );
+          }
+        }
+        const current = await tx.user.findUnique({
+          where: { id: userId },
+          select: { defaultExpenseAccountId: true },
+        });
+        if (!current)
+          throw new HttpError(404, "USER_NOT_FOUND", "The user was not found.");
+        await tx.user.update({
+          where: { id: userId },
+          data: { defaultExpenseAccountId: accountId },
+        });
+        await tx.auditLog.create({
+          data: {
+            userId,
+            entityType: "USER_PREFERENCE",
+            entityId: userId,
+            action: "DEFAULT_EXPENSE_ACCOUNT_CHANGED",
+            changes: {
+              previousAccountId: current.defaultExpenseAccountId,
+              accountId,
+            },
+          },
+        });
+        await tx.idempotencyRecord.create({
+          data: {
+            userId,
+            key: idempotencyKey,
+            requestHash,
+            resourceType: "USER_PREFERENCE",
+            resourceId: userId,
+          },
+        });
+      });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const existing = await this.prisma.idempotencyRecord.findFirst({
+        where: { userId, key: idempotencyKey },
+        select: { requestHash: true },
+      });
+      if (!existing || existing.requestHash !== requestHash) {
+        throw new HttpError(
+          409,
+          "IDEMPOTENCY_KEY_REUSED",
+          "This idempotency key was already used for different data.",
+        );
+      }
+    }
   }
 
   async getAccount(userId: string, accountId: string): Promise<AccountReference | null> {
@@ -508,6 +613,271 @@ export class PrismaAccountsRepository implements AccountsRepository {
           },
         });
         return mapTransaction(transaction);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+    );
+  }
+
+  async replaceExpense(
+    input: ReplaceExpenseRepositoryInput,
+  ): Promise<ReplaceExpenseRepositoryResult> {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const priorReplacement = await tx.ledgerTransaction.findFirst({
+          where: {
+            userId: input.userId,
+            idempotencyKey: input.replacementIdempotencyKey,
+          },
+          include: transactionInclude,
+        });
+        if (priorReplacement) {
+          if (priorReplacement.requestHash !== input.requestHash) {
+            throw new HttpError(
+              409,
+              "IDEMPOTENCY_KEY_REUSED",
+              "This idempotency key was already used for different data.",
+            );
+          }
+          const priorReversal = await tx.ledgerTransaction.findFirst({
+            where: {
+              userId: input.userId,
+              reversalOfId: input.originalTransactionId,
+              idempotencyKey: input.reversalIdempotencyKey,
+            },
+            include: transactionInclude,
+          });
+          if (!priorReversal)
+            throw new Error("Expense replacement reversal was not found.");
+          return {
+            reversal: mapTransaction(priorReversal),
+            transaction: mapTransaction(priorReplacement),
+          };
+        }
+
+        let original = await tx.ledgerTransaction.findFirst({
+          where: {
+            id: input.originalTransactionId,
+            userId: input.userId,
+            source: "EXPENSE",
+          },
+          include: { ...transactionInclude },
+        });
+        if (!original) {
+          throw new HttpError(404, "EXPENSE_NOT_FOUND", "The expense was not found.");
+        }
+        if (original.reversedBy) {
+          throw new HttpError(
+            409,
+            "EXPENSE_ALREADY_REVERSED",
+            "This expense was already reversed.",
+          );
+        }
+
+        const originalLedgerIds = original.entries.map((entry) => entry.ledgerAccountId);
+        const sourceAccount = await tx.financialAccount.findFirst({
+          where: {
+            userId: input.userId,
+            ledgerAccountId: { in: originalLedgerIds },
+            accountType: { in: ["BANK", "CASH", "UPI"] },
+          },
+          select: { id: true, ledgerAccountId: true },
+        });
+        if (!sourceAccount) {
+          throw new HttpError(
+            409,
+            "EXPENSE_ACCOUNT_MISSING",
+            "The linked spending account was not found.",
+          );
+        }
+        const expenseLedger = await tx.ledgerAccount.upsert({
+          where: { userId_code: { userId: input.userId, code: "SYS_GENERAL_EXPENSE" } },
+          create: {
+            userId: input.userId,
+            code: "SYS_GENERAL_EXPENSE",
+            name: "General expenses",
+            category: "EXPENSE",
+            normalBalance: "DEBIT",
+            isSystem: true,
+          },
+          update: {},
+          select: { id: true },
+        });
+        const amount = new Prisma.Decimal(input.amount);
+        const replacementEntries = [
+          {
+            ledgerAccountId: expenseLedger.id,
+            debitAmount: amount,
+            creditAmount: new Prisma.Decimal(0),
+          },
+          {
+            ledgerAccountId: sourceAccount.ledgerAccountId,
+            debitAmount: new Prisma.Decimal(0),
+            creditAmount: amount,
+          },
+        ];
+        const reversalEntries = original.entries.map((entry) => ({
+          ledgerAccountId: entry.ledgerAccountId,
+          debitAmount: entry.creditAmount,
+          creditAmount: entry.debitAmount,
+        }));
+        assertBalancedEntries(
+          replacementEntries.map((entry) => ({
+            ledgerAccountId: entry.ledgerAccountId,
+            debitAmount: entry.debitAmount.toFixed(2),
+            creditAmount: entry.creditAmount.toFixed(2),
+          })),
+        );
+        assertBalancedEntries(
+          reversalEntries.map((entry) => ({
+            ledgerAccountId: entry.ledgerAccountId,
+            debitAmount: entry.debitAmount.toFixed(2),
+            creditAmount: entry.creditAmount.toFixed(2),
+          })),
+        );
+
+        const ledgerAccountIds = [
+          ...new Set([
+            ...originalLedgerIds,
+            expenseLedger.id,
+            sourceAccount.ledgerAccountId,
+          ]),
+        ].sort();
+        const ownedCount = await tx.ledgerAccount.count({
+          where: { userId: input.userId, id: { in: ledgerAccountIds } },
+        });
+        if (ownedCount !== ledgerAccountIds.length) {
+          throw new HttpError(
+            404,
+            "LEDGER_ACCOUNT_NOT_FOUND",
+            "A ledger account was not found.",
+          );
+        }
+        const locked = await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT id FROM ledger_accounts
+          WHERE user_id = ${input.userId}
+            AND id IN (${Prisma.join(ledgerAccountIds)})
+          ORDER BY id FOR UPDATE`,
+        );
+        if (locked.length !== ledgerAccountIds.length) {
+          throw new HttpError(
+            404,
+            "LEDGER_ACCOUNT_NOT_FOUND",
+            "A ledger account was not found.",
+          );
+        }
+        original = await tx.ledgerTransaction.findFirst({
+          where: {
+            id: input.originalTransactionId,
+            userId: input.userId,
+            source: "EXPENSE",
+          },
+          include: transactionInclude,
+        });
+        if (!original)
+          throw new HttpError(404, "EXPENSE_NOT_FOUND", "The expense was not found.");
+        if (original.reversedBy) {
+          throw new HttpError(
+            409,
+            "EXPENSE_ALREADY_REVERSED",
+            "This expense was already reversed.",
+          );
+        }
+
+        const account = await tx.ledgerAccount.findUnique({
+          where: { id: sourceAccount.ledgerAccountId },
+          select: { normalBalance: true, financialAccount: { select: { id: true } } },
+        });
+        if (!account?.financialAccount) {
+          throw new HttpError(
+            404,
+            "EXPENSE_ACCOUNT_MISSING",
+            "The linked spending account was not found.",
+          );
+        }
+        const sums = await tx.transactionEntry.groupBy({
+          by: ["ledgerAccountId"],
+          where: { ledgerAccountId: { in: ledgerAccountIds } },
+          _sum: { debitAmount: true, creditAmount: true },
+        });
+        const currentTotals = new Map(
+          sums.map((sum) => [
+            sum.ledgerAccountId,
+            {
+              debits: sum._sum.debitAmount ?? new Prisma.Decimal(0),
+              credits: sum._sum.creditAmount ?? new Prisma.Decimal(0),
+            },
+          ]),
+        );
+        const current = currentTotals.get(sourceAccount.ledgerAccountId);
+        const currentBalance = (current?.debits ?? new Prisma.Decimal(0)).minus(
+          current?.credits ?? new Prisma.Decimal(0),
+        );
+        const change = [...reversalEntries, ...replacementEntries]
+          .filter((entry) => entry.ledgerAccountId === sourceAccount.ledgerAccountId)
+          .reduce(
+            (sum, entry) => sum.plus(entry.debitAmount).minus(entry.creditAmount),
+            new Prisma.Decimal(0),
+          );
+        if (change.lt(0) && currentBalance.plus(change).lt(0)) {
+          throw new HttpError(
+            409,
+            "INSUFFICIENT_FUNDS",
+            "The account does not have enough balance for the edited expense.",
+          );
+        }
+
+        const reversal = await tx.ledgerTransaction.create({
+          data: {
+            userId: input.userId,
+            effectiveDate: original.effectiveDate,
+            description: `Reversal: Expense edited — ${original.description}`,
+            source: "REVERSAL",
+            idempotencyKey: input.reversalIdempotencyKey,
+            requestHash: input.reversalRequestHash,
+            reversalOfId: original.id,
+            entries: { create: reversalEntries },
+          },
+          include: transactionInclude,
+        });
+        const transaction = await tx.ledgerTransaction.create({
+          data: {
+            userId: input.userId,
+            effectiveDate: toDate(input.effectiveDate),
+            description: input.description,
+            source: "EXPENSE",
+            idempotencyKey: input.replacementIdempotencyKey,
+            requestHash: input.requestHash,
+            entries: { create: replacementEntries },
+          },
+          include: transactionInclude,
+        });
+        await tx.auditLog.createMany({
+          data: [
+            {
+              userId: input.userId,
+              entityType: "LEDGER_TRANSACTION",
+              entityId: reversal.id,
+              action: "TRANSACTION_REVERSED",
+              changes: { source: "REVERSAL", reversalOfId: original.id },
+            },
+            {
+              userId: input.userId,
+              entityType: "LEDGER_TRANSACTION",
+              entityId: transaction.id,
+              action: "EXPENSE_EDITED",
+              changes: {
+                effectiveDate: input.effectiveDate,
+                description: input.description,
+                amount: input.amount,
+                replacesTransactionId: original.id,
+              },
+            },
+          ],
+        });
+        return {
+          reversal: mapTransaction(reversal),
+          transaction: mapTransaction(transaction),
+        };
       },
       { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
     );

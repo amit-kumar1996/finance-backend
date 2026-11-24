@@ -12,6 +12,8 @@ import type {
   IdempotentResource,
   LedgerTransactionRecord,
   PostTransactionRepositoryInput,
+  ReplaceExpenseRepositoryInput,
+  ReplaceExpenseRepositoryResult,
 } from "./accounts.types.js";
 import { Prisma } from "../../generated/prisma/client.js";
 
@@ -31,6 +33,7 @@ class MemoryAccountsRepository implements AccountsRepository {
   private readonly transactionKeys = new Map<string, string>();
   private readonly systemAccounts = new Map<string, string>();
   private readonly personLedgerOwners = new Map<string, string>();
+  private readonly defaultExpenseAccounts = new Map<string, string>();
   private nextId = 0;
 
   addPersonLedgerAccount(userId: string, ledgerAccountId: string): void {
@@ -78,6 +81,21 @@ class MemoryAccountsRepository implements AccountsRepository {
           createdAt: account.createdAt,
         };
       });
+  }
+
+  async getDefaultExpenseAccount(userId: string): Promise<AccountSummary | null> {
+    const accountId = this.defaultExpenseAccounts.get(userId);
+    return accountId ? this.getAccountSummary(userId, accountId) : null;
+  }
+
+  async setDefaultExpenseAccount(
+    userId: string,
+    accountId: string | null,
+    _idempotencyKey: string,
+    _requestHash: string,
+  ): Promise<void> {
+    if (accountId) this.defaultExpenseAccounts.set(userId, accountId);
+    else this.defaultExpenseAccounts.delete(userId);
   }
 
   async getAccount(userId: string, accountId: string): Promise<AccountReference | null> {
@@ -310,6 +328,12 @@ class MemoryAccountsRepository implements AccountsRepository {
     });
     return { ...row, entries: row.entries.map((entry) => ({ ...entry })) };
   }
+
+  async replaceExpense(
+    _input: ReplaceExpenseRepositoryInput,
+  ): Promise<ReplaceExpenseRepositoryResult> {
+    throw new Error("Expense replacement is covered by the Prisma repository.");
+  }
 }
 
 const newService = () => {
@@ -373,6 +397,30 @@ describe("double-entry accounts and ledger", () => {
       (await service.listAccounts("user-a")).find((account) => account.id === bank.id)
         ?.balance,
     ).toBe("1000.00");
+  });
+
+  it("posts a three-field expense through the configured default spending account", async () => {
+    const { service } = newService();
+    const bank = await makeAccount(service, "user-a", "bank", "BANK", "1000.00");
+    await service.setDefaultExpenseAccount("user-a", "default-account", bank.id);
+    const transaction = await service.expenseUsingDefault("user-a", "expense-default", {
+      effectiveDate: "2026-11-24",
+      amount: "1000.00",
+      description: "Groceries",
+    });
+    const secondBank = await makeAccount(service, "user-a", "bank-b", "BANK", "100.00");
+    await service.setDefaultExpenseAccount("user-a", "change-default", secondBank.id);
+    const retry = await service.expenseUsingDefault("user-a", "expense-default", {
+      effectiveDate: "2026-11-24",
+      amount: "1000.00",
+      description: "Groceries",
+    });
+    expect(retry.id).toBe(transaction.id);
+    expect(transaction.source).toBe("EXPENSE");
+    expect(
+      (await service.listAccounts("user-a")).find((account) => account.id === bank.id)
+        ?.balance,
+    ).toBe("0.00");
   });
 
   it("tracks money given and received as a per-person receivable", async () => {
