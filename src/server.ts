@@ -9,6 +9,9 @@ import { createAuthRouter } from "./modules/auth/auth.routes.js";
 import { AccountsService } from "./modules/accounts/accounts.service.js";
 import { createAccountsRouter } from "./modules/accounts/accounts.routes.js";
 import { PrismaAccountsRepository } from "./modules/accounts/prisma-accounts.repository.js";
+import { PeopleService } from "./modules/people/people.service.js";
+import { PrismaPeopleRepository } from "./modules/people/prisma-people.repository.js";
+import { createPeopleRouter } from "./modules/people/people.routes.js";
 
 const authConfig = {
   rpId: env.WEBAUTHN_RP_ID,
@@ -24,6 +27,10 @@ const authService = new AuthService(
   authConfig,
 );
 const accountsService = new AccountsService(new PrismaAccountsRepository(prisma));
+const peopleService = new PeopleService(
+  new PrismaPeopleRepository(prisma),
+  accountsService,
+);
 
 const app = createApp(
   async () => {
@@ -32,6 +39,12 @@ const app = createApp(
   createAuthRouter(authService, authConfig, env.NODE_ENV === "production"),
   createAccountsRouter(
     accountsService,
+    authService,
+    authConfig,
+    env.NODE_ENV === "production",
+  ),
+  createPeopleRouter(
+    peopleService,
     authService,
     authConfig,
     env.NODE_ENV === "production",

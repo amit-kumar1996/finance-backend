@@ -7,7 +7,11 @@ export type LedgerTransactionSource =
   | "EXPENSE"
   | "CREDIT_CARD_PURCHASE"
   | "CREDIT_CARD_PAYMENT"
-  | "REVERSAL";
+  | "REVERSAL"
+  | "PERSON_GIVE"
+  | "PERSON_RECEIVE"
+  | "PERSON_BORROW"
+  | "PERSON_REPAY";
 
 export interface AccountSummary {
   id: string;
@@ -73,6 +77,7 @@ export interface PostTransactionRepositoryInput {
   requestHash: string;
   entries: TransactionEntryRecord[];
   reversalOfId?: string;
+  activePersonId?: string;
 }
 
 export interface AccountsRepository {

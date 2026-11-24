@@ -232,6 +232,50 @@ export class AccountsService {
     });
   }
 
+  async postPersonMovement(
+    userId: string,
+    idempotencyKey: string,
+    input: {
+      movement: "GIVE" | "RECEIVE" | "BORROW" | "REPAY";
+      personLedgerAccountId: string;
+      personId: string;
+      accountId: string;
+      effectiveDate: string;
+      amount: string;
+      description: string;
+    },
+  ): Promise<LedgerTransactionRecord> {
+    const account = await this.requireAssetAccount(userId, input.accountId);
+    const amount = formatMoney(parseMoney(input.amount));
+    const sourceByMovement = {
+      GIVE: "PERSON_GIVE",
+      RECEIVE: "PERSON_RECEIVE",
+      BORROW: "PERSON_BORROW",
+      REPAY: "PERSON_REPAY",
+    } as const;
+    const debitAccountId =
+      input.movement === "GIVE" || input.movement === "REPAY"
+        ? input.personLedgerAccountId
+        : account.ledgerAccountId;
+    const creditAccountId =
+      input.movement === "GIVE" || input.movement === "REPAY"
+        ? account.ledgerAccountId
+        : input.personLedgerAccountId;
+    return this.post(userId, idempotencyKey, sourceByMovement[input.movement], {
+      effectiveDate: input.effectiveDate,
+      description: input.description,
+      personLedgerAccountId: input.personLedgerAccountId,
+      activePersonId: input.personId,
+      accountId: account.id,
+      movement: input.movement,
+      amount,
+      entries: [
+        this.entry(debitAccountId, amount, "0.00"),
+        this.entry(creditAccountId, "0.00", amount),
+      ],
+    });
+  }
+
   async reverse(
     userId: string,
     idempotencyKey: string,
@@ -270,6 +314,7 @@ export class AccountsService {
       description: string;
       entries: TransactionEntryRecord[];
       reversalOfId?: string;
+      activePersonId?: string;
       [key: string]: unknown;
     },
   ): Promise<LedgerTransactionRecord> {
@@ -293,6 +338,7 @@ export class AccountsService {
       requestHash,
       entries: input.entries,
       ...(input.reversalOfId ? { reversalOfId: input.reversalOfId } : {}),
+      ...(input.activePersonId ? { activePersonId: input.activePersonId } : {}),
     };
     try {
       return await this.repository.postTransaction(transactionInput);

@@ -30,7 +30,27 @@ class MemoryAccountsRepository implements AccountsRepository {
   private readonly accountKeys = new Map<string, IdempotentResource>();
   private readonly transactionKeys = new Map<string, string>();
   private readonly systemAccounts = new Map<string, string>();
+  private readonly personLedgerOwners = new Map<string, string>();
   private nextId = 0;
+
+  addPersonLedgerAccount(userId: string, ledgerAccountId: string): void {
+    this.personLedgerOwners.set(ledgerAccountId, userId);
+  }
+
+  ledgerBalance(ledgerAccountId: string, normal: "DEBIT" | "CREDIT"): string {
+    let debits = new Prisma.Decimal(0);
+    let credits = new Prisma.Decimal(0);
+    for (const transaction of this.transactions.values()) {
+      for (const entry of transaction.entries) {
+        if (entry.ledgerAccountId !== ledgerAccountId) continue;
+        debits = debits.plus(entry.debitAmount);
+        credits = credits.plus(entry.creditAmount);
+      }
+    }
+    return (normal === "DEBIT" ? debits.minus(credits) : credits.minus(debits)).toFixed(
+      2,
+    );
+  }
 
   async listAccounts(userId: string): Promise<AccountSummary[]> {
     return [...this.accounts.values()]
@@ -205,6 +225,9 @@ class MemoryAccountsRepository implements AccountsRepository {
         .map((account) => account.ledgerAccountId),
     );
     for (const id of this.systemAccounts.values()) ownedLedgerIds.add(id);
+    for (const [id, owner] of this.personLedgerOwners) {
+      if (owner === input.userId) ownedLedgerIds.add(id);
+    }
     if (input.entries.some((entry) => !ownedLedgerIds.has(entry.ledgerAccountId))) {
       throw new HttpError(
         404,
@@ -350,6 +373,66 @@ describe("double-entry accounts and ledger", () => {
       (await service.listAccounts("user-a")).find((account) => account.id === bank.id)
         ?.balance,
     ).toBe("1000.00");
+  });
+
+  it("tracks money given and received as a per-person receivable", async () => {
+    const { repository, service } = newService();
+    const bank = await makeAccount(service, "user-a", "bank", "BANK", "10000.00");
+    repository.addPersonLedgerAccount("user-a", "person-receivable");
+    await service.postPersonMovement("user-a", "give-1", {
+      movement: "GIVE",
+      personId: "person-1",
+      personLedgerAccountId: "person-receivable",
+      accountId: bank.id,
+      effectiveDate: "2026-11-24",
+      amount: "10000.00",
+      description: "GIVE: Alex",
+    });
+    await service.postPersonMovement("user-a", "receive-1", {
+      movement: "RECEIVE",
+      personId: "person-1",
+      personLedgerAccountId: "person-receivable",
+      accountId: bank.id,
+      effectiveDate: "2026-11-24",
+      amount: "2000.00",
+      description: "RECEIVE: Alex",
+    });
+
+    expect(repository.ledgerBalance("person-receivable", "DEBIT")).toBe("8000.00");
+    expect(
+      (await service.listAccounts("user-a")).find((account) => account.id === bank.id)
+        ?.balance,
+    ).toBe("2000.00");
+  });
+
+  it("tracks money borrowed and repaid as a per-person liability", async () => {
+    const { repository, service } = newService();
+    const bank = await makeAccount(service, "user-a", "bank", "BANK", "0.00");
+    repository.addPersonLedgerAccount("user-a", "person-payable");
+    await service.postPersonMovement("user-a", "borrow-1", {
+      movement: "BORROW",
+      personId: "person-2",
+      personLedgerAccountId: "person-payable",
+      accountId: bank.id,
+      effectiveDate: "2026-11-24",
+      amount: "20000.00",
+      description: "BORROW: Alex",
+    });
+    await service.postPersonMovement("user-a", "repay-1", {
+      movement: "REPAY",
+      personId: "person-2",
+      personLedgerAccountId: "person-payable",
+      accountId: bank.id,
+      effectiveDate: "2026-11-24",
+      amount: "5000.00",
+      description: "REPAY: Alex",
+    });
+
+    expect(repository.ledgerBalance("person-payable", "CREDIT")).toBe("15000.00");
+    expect(
+      (await service.listAccounts("user-a")).find((account) => account.id === bank.id)
+        ?.balance,
+    ).toBe("15000.00");
   });
 
   it("rejects spending or card payments that exceed the posted account balance", async () => {

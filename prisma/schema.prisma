@@ -39,6 +39,10 @@ enum LedgerTransactionSource {
   CREDIT_CARD_PURCHASE
   CREDIT_CARD_PAYMENT
   REVERSAL
+  PERSON_GIVE
+  PERSON_RECEIVE
+  PERSON_BORROW
+  PERSON_REPAY
 }
 
 model User {
@@ -54,6 +58,8 @@ model User {
   ledgerAccounts     LedgerAccount[]
   ledgerTransactions LedgerTransaction[]
   auditLogs          AuditLog[]
+  persons            Person[]
+  idempotencyRecords IdempotencyRecord[]
 
   @@map("users")
 }
@@ -149,10 +155,45 @@ model LedgerAccount {
   user             User                  @relation(fields: [userId], references: [id], onDelete: Cascade)
   financialAccount FinancialAccount?
   entries          TransactionEntry[]
+  personReceivable Person?               @relation("PersonReceivable")
+  personPayable    Person?               @relation("PersonPayable")
 
   @@unique([userId, code])
   @@index([userId, category])
   @@map("ledger_accounts")
+}
+
+model Person {
+  id                  String        @id @default(cuid()) @db.VarChar(30)
+  userId              String        @map("user_id") @db.VarChar(30)
+  name                String        @db.VarChar(120)
+  notes               String?       @db.VarChar(500)
+  receivableAccountId String        @unique @map("receivable_account_id") @db.VarChar(30)
+  payableAccountId    String        @unique @map("payable_account_id") @db.VarChar(30)
+  archivedAt          DateTime?     @map("archived_at") @db.DateTime(3)
+  createdAt           DateTime      @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt           DateTime      @updatedAt @map("updated_at") @db.DateTime(3)
+  user                User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  receivableAccount   LedgerAccount @relation("PersonReceivable", fields: [receivableAccountId], references: [id], onDelete: Restrict)
+  payableAccount      LedgerAccount @relation("PersonPayable", fields: [payableAccountId], references: [id], onDelete: Restrict)
+
+  @@index([userId, archivedAt, name])
+  @@map("persons")
+}
+
+model IdempotencyRecord {
+  id           String   @id @default(cuid()) @db.VarChar(30)
+  userId       String   @map("user_id") @db.VarChar(30)
+  key          String   @db.VarChar(128)
+  requestHash  String   @map("request_hash") @db.Char(64)
+  resourceType String   @map("resource_type") @db.VarChar(40)
+  resourceId   String   @map("resource_id") @db.VarChar(30)
+  createdAt    DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  user         User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key])
+  @@index([resourceType, resourceId])
+  @@map("idempotency_records")
 }
 
 model LedgerTransaction {

@@ -13,6 +13,7 @@ export const createApp = (
   checkDatabase: DatabaseCheck,
   authRouter?: Router,
   accountsRouter?: Router,
+  peopleRouter?: Router,
 ): Express => {
   const app = express();
 
@@ -51,6 +52,7 @@ export const createApp = (
   );
   if (authRouter) app.use("/api/v1/auth", authRouter);
   if (accountsRouter) app.use("/api/v1", accountsRouter);
+  if (peopleRouter) app.use("/api/v1", peopleRouter);
   app.use("/api/v1", createHealthRouter(checkDatabase));
   app.use((_request, response) => {
     response.status(404).json({

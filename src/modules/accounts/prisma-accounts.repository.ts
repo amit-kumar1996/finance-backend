@@ -326,165 +326,190 @@ export class PrismaAccountsRepository implements AccountsRepository {
   async postTransaction(
     input: PostTransactionRepositoryInput,
   ): Promise<LedgerTransactionRecord> {
-    return this.prisma.$transaction(async (tx) => {
-      const existing = await tx.ledgerTransaction.findFirst({
-        where: { userId: input.userId, idempotencyKey: input.idempotencyKey },
-        include: transactionInclude,
-      });
-      if (existing) {
-        if (existing.requestHash !== input.requestHash) {
+    return this.prisma.$transaction(
+      async (tx) => {
+        const existing = await tx.ledgerTransaction.findFirst({
+          where: { userId: input.userId, idempotencyKey: input.idempotencyKey },
+          include: transactionInclude,
+        });
+        if (existing) {
+          if (existing.requestHash !== input.requestHash) {
+            throw new HttpError(
+              409,
+              "IDEMPOTENCY_KEY_REUSED",
+              "This idempotency key was already used for different data.",
+            );
+          }
+          return mapTransaction(existing);
+        }
+
+        const ledgerAccountIds = [
+          ...new Set(input.entries.map((entry) => entry.ledgerAccountId)),
+        ];
+        const ownedAccountCount = await tx.ledgerAccount.count({
+          where: { id: { in: ledgerAccountIds }, userId: input.userId },
+        });
+        if (ownedAccountCount !== ledgerAccountIds.length) {
           throw new HttpError(
-            409,
-            "IDEMPOTENCY_KEY_REUSED",
-            "This idempotency key was already used for different data.",
+            404,
+            "LEDGER_ACCOUNT_NOT_FOUND",
+            "A ledger account was not found.",
           );
         }
-        return mapTransaction(existing);
-      }
 
-      const ledgerAccountIds = [
-        ...new Set(input.entries.map((entry) => entry.ledgerAccountId)),
-      ];
-      const ownedAccountCount = await tx.ledgerAccount.count({
-        where: { id: { in: ledgerAccountIds }, userId: input.userId },
-      });
-      if (ownedAccountCount !== ledgerAccountIds.length) {
-        throw new HttpError(
-          404,
-          "LEDGER_ACCOUNT_NOT_FOUND",
-          "A ledger account was not found.",
-        );
-      }
-
-      const orderedLedgerAccountIds = [...ledgerAccountIds].sort();
-      const lockedLedgerAccounts = await tx.$queryRaw<Array<{ id: string }>>(
-        Prisma.sql`SELECT id FROM ledger_accounts
+        const orderedLedgerAccountIds = [...ledgerAccountIds].sort();
+        const lockedLedgerAccounts = await tx.$queryRaw<Array<{ id: string }>>(
+          Prisma.sql`SELECT id FROM ledger_accounts
           WHERE user_id = ${input.userId}
             AND id IN (${Prisma.join(orderedLedgerAccountIds)})
           ORDER BY id FOR UPDATE`,
-      );
-      if (lockedLedgerAccounts.length !== orderedLedgerAccountIds.length) {
-        throw new HttpError(
-          404,
-          "LEDGER_ACCOUNT_NOT_FOUND",
-          "A ledger account was not found.",
         );
-      }
+        if (lockedLedgerAccounts.length !== orderedLedgerAccountIds.length) {
+          throw new HttpError(
+            404,
+            "LEDGER_ACCOUNT_NOT_FOUND",
+            "A ledger account was not found.",
+          );
+        }
 
-      if (input.source !== "REVERSAL") {
-        const ledgerAccounts = await tx.ledgerAccount.findMany({
-          where: { id: { in: orderedLedgerAccountIds }, userId: input.userId },
-          select: {
-            id: true,
-            normalBalance: true,
-            financialAccount: { select: { id: true } },
-          },
-        });
-        const totals = await tx.transactionEntry.groupBy({
-          by: ["ledgerAccountId"],
-          where: { ledgerAccountId: { in: orderedLedgerAccountIds } },
-          _sum: { debitAmount: true, creditAmount: true },
-        });
-        const totalByLedgerAccount = new Map(
-          totals.map((total) => [
-            total.ledgerAccountId,
-            {
-              debits: total._sum.debitAmount ?? new Prisma.Decimal(0),
-              credits: total._sum.creditAmount ?? new Prisma.Decimal(0),
+        if (input.activePersonId) {
+          const activePerson = await tx.person.findFirst({
+            where: { id: input.activePersonId, userId: input.userId, archivedAt: null },
+            select: { receivableAccountId: true, payableAccountId: true },
+          });
+          if (
+            !activePerson ||
+            ![activePerson.receivableAccountId, activePerson.payableAccountId].some(
+              (id) => orderedLedgerAccountIds.includes(id),
+            )
+          ) {
+            throw new HttpError(404, "PERSON_NOT_FOUND", "The person was not found.");
+          }
+        }
+
+        if (input.source !== "REVERSAL") {
+          const ledgerAccounts = await tx.ledgerAccount.findMany({
+            where: { id: { in: orderedLedgerAccountIds }, userId: input.userId },
+            select: {
+              id: true,
+              normalBalance: true,
+              financialAccount: { select: { id: true } },
+              personReceivable: { select: { id: true } },
+              personPayable: { select: { id: true } },
             },
-          ]),
-        );
-        for (const account of ledgerAccounts) {
-          if (!account.financialAccount) continue;
-          const totalsForAccount = totalByLedgerAccount.get(account.id);
-          const debits = totalsForAccount?.debits ?? new Prisma.Decimal(0);
-          const credits = totalsForAccount?.credits ?? new Prisma.Decimal(0);
-          const currentBalance =
-            account.normalBalance === "DEBIT"
-              ? debits.minus(credits)
-              : credits.minus(debits);
-          const change = input.entries
-            .filter((entry) => entry.ledgerAccountId === account.id)
-            .reduce((sum, entry) => {
-              const debit = new Prisma.Decimal(entry.debitAmount);
-              const credit = new Prisma.Decimal(entry.creditAmount);
-              return sum.plus(
-                account.normalBalance === "DEBIT"
-                  ? debit.minus(credit)
-                  : credit.minus(debit),
+          });
+          const totals = await tx.transactionEntry.groupBy({
+            by: ["ledgerAccountId"],
+            where: { ledgerAccountId: { in: orderedLedgerAccountIds } },
+            _sum: { debitAmount: true, creditAmount: true },
+          });
+          const totalByLedgerAccount = new Map(
+            totals.map((total) => [
+              total.ledgerAccountId,
+              {
+                debits: total._sum.debitAmount ?? new Prisma.Decimal(0),
+                credits: total._sum.creditAmount ?? new Prisma.Decimal(0),
+              },
+            ]),
+          );
+          for (const account of ledgerAccounts) {
+            if (
+              !account.financialAccount &&
+              !account.personReceivable &&
+              !account.personPayable
+            )
+              continue;
+            const totalsForAccount = totalByLedgerAccount.get(account.id);
+            const debits = totalsForAccount?.debits ?? new Prisma.Decimal(0);
+            const credits = totalsForAccount?.credits ?? new Prisma.Decimal(0);
+            const currentBalance =
+              account.normalBalance === "DEBIT"
+                ? debits.minus(credits)
+                : credits.minus(debits);
+            const change = input.entries
+              .filter((entry) => entry.ledgerAccountId === account.id)
+              .reduce((sum, entry) => {
+                const debit = new Prisma.Decimal(entry.debitAmount);
+                const credit = new Prisma.Decimal(entry.creditAmount);
+                return sum.plus(
+                  account.normalBalance === "DEBIT"
+                    ? debit.minus(credit)
+                    : credit.minus(debit),
+                );
+              }, new Prisma.Decimal(0));
+            if (change.lt(0) && currentBalance.plus(change).lt(0)) {
+              throw new HttpError(
+                409,
+                "INSUFFICIENT_FUNDS",
+                "The account does not have enough balance for this posting.",
               );
-            }, new Prisma.Decimal(0));
-          if (change.lt(0) && currentBalance.plus(change).lt(0)) {
+            }
+          }
+        }
+
+        if (input.reversalOfId) {
+          const original = await tx.ledgerTransaction.findFirst({
+            where: { id: input.reversalOfId, userId: input.userId },
+            include: { reversedBy: { select: { id: true } } },
+          });
+          if (!original) {
+            throw new HttpError(
+              404,
+              "TRANSACTION_NOT_FOUND",
+              "The transaction was not found.",
+            );
+          }
+          if (original.reversedBy) {
             throw new HttpError(
               409,
-              "INSUFFICIENT_FUNDS",
-              "The account does not have enough balance for this posting.",
+              "TRANSACTION_ALREADY_REVERSED",
+              "This transaction has already been reversed.",
             );
           }
         }
-      }
 
-      if (input.reversalOfId) {
-        const original = await tx.ledgerTransaction.findFirst({
-          where: { id: input.reversalOfId, userId: input.userId },
-          include: { reversedBy: { select: { id: true } } },
-        });
-        if (!original) {
-          throw new HttpError(
-            404,
-            "TRANSACTION_NOT_FOUND",
-            "The transaction was not found.",
-          );
-        }
-        if (original.reversedBy) {
-          throw new HttpError(
-            409,
-            "TRANSACTION_ALREADY_REVERSED",
-            "This transaction has already been reversed.",
-          );
-        }
-      }
-
-      const transaction = await tx.ledgerTransaction.create({
-        data: {
-          userId: input.userId,
-          effectiveDate: toDate(input.effectiveDate),
-          description: input.description,
-          source: input.source,
-          idempotencyKey: input.idempotencyKey,
-          requestHash: input.requestHash,
-          ...(input.reversalOfId ? { reversalOfId: input.reversalOfId } : {}),
-          entries: {
-            create: input.entries.map((entry) => ({
-              ledgerAccountId: entry.ledgerAccountId,
-              debitAmount: new Prisma.Decimal(entry.debitAmount),
-              creditAmount: new Prisma.Decimal(entry.creditAmount),
-            })),
-          },
-        },
-        include: transactionInclude,
-      });
-      await tx.auditLog.create({
-        data: {
-          userId: input.userId,
-          entityType: "LEDGER_TRANSACTION",
-          entityId: transaction.id,
-          action:
-            input.source === "REVERSAL" ? "TRANSACTION_REVERSED" : "TRANSACTION_POSTED",
-          changes: {
-            source: input.source,
-            effectiveDate: input.effectiveDate,
+        const transaction = await tx.ledgerTransaction.create({
+          data: {
+            userId: input.userId,
+            effectiveDate: toDate(input.effectiveDate),
             description: input.description,
-            entries: input.entries.map((entry) => ({
-              ledgerAccountId: entry.ledgerAccountId,
-              debitAmount: entry.debitAmount,
-              creditAmount: entry.creditAmount,
-            })),
+            source: input.source,
+            idempotencyKey: input.idempotencyKey,
+            requestHash: input.requestHash,
             ...(input.reversalOfId ? { reversalOfId: input.reversalOfId } : {}),
+            entries: {
+              create: input.entries.map((entry) => ({
+                ledgerAccountId: entry.ledgerAccountId,
+                debitAmount: new Prisma.Decimal(entry.debitAmount),
+                creditAmount: new Prisma.Decimal(entry.creditAmount),
+              })),
+            },
           },
-        },
-      });
-      return mapTransaction(transaction);
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted });
+          include: transactionInclude,
+        });
+        await tx.auditLog.create({
+          data: {
+            userId: input.userId,
+            entityType: "LEDGER_TRANSACTION",
+            entityId: transaction.id,
+            action:
+              input.source === "REVERSAL" ? "TRANSACTION_REVERSED" : "TRANSACTION_POSTED",
+            changes: {
+              source: input.source,
+              effectiveDate: input.effectiveDate,
+              description: input.description,
+              entries: input.entries.map((entry) => ({
+                ledgerAccountId: entry.ledgerAccountId,
+                debitAmount: entry.debitAmount,
+                creditAmount: entry.creditAmount,
+              })),
+              ...(input.reversalOfId ? { reversalOfId: input.reversalOfId } : {}),
+            },
+          },
+        });
+        return mapTransaction(transaction);
+      },
+      { isolationLevel: Prisma.TransactionIsolationLevel.ReadCommitted },
+    );
   }
 }
