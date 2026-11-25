@@ -1,0 +1,78 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+TAG="${1:-}"
+[[ "$TAG" =~ ^[a-f0-9]{40}$ ]] || { echo "Expected one lowercase 40-character commit SHA." >&2; exit 2; }
+
+APP_DIR=/opt/pfm/finance-backend
+ENV_FILE="$APP_DIR/.env.production"
+COMPOSE_FILE="$APP_DIR/compose.production.yml"
+STATE_DIR=/var/lib/pfm-deploy
+STATE_FILE="$STATE_DIR/last-known-good-image"
+HEALTH_URL=http://127.0.0.1:3000/api/v1/health
+
+[[ -r "$ENV_FILE" && -r "$COMPOSE_FILE" ]] || { echo "Deployment files are missing under $APP_DIR." >&2; exit 3; }
+set -a
+# This file is root-owned and mode 0600 on the VM.
+. "$ENV_FILE"
+set +a
+: "${REGISTRY_IMAGE:?REGISTRY_IMAGE is required in .env.production}"
+: "${MYSQL_CONTAINER:?MYSQL_CONTAINER is required in .env.production}"
+[[ "$REGISTRY_IMAGE" =~ ^ghcr\.io/[a-z0-9_.-]+/[a-z0-9_.-]+$ ]] || { echo "REGISTRY_IMAGE is invalid." >&2; exit 2; }
+
+install -d -m 700 "$STATE_DIR"
+NEW_API_IMAGE="$REGISTRY_IMAGE:$TAG"
+NEW_MIGRATE_IMAGE="$REGISTRY_IMAGE:$TAG-migrate"
+PREVIOUS_IMAGE=""
+if [[ -s "$STATE_FILE" ]]; then
+  PREVIOUS_IMAGE="$(cat "$STATE_FILE")"
+else
+  RUNNING_ID="$(docker compose --project-directory "$APP_DIR" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" ps -q api 2>/dev/null || true)"
+  if [[ -n "$RUNNING_ID" ]]; then
+    PREVIOUS_IMAGE="$(docker inspect --format '{{.Config.Image}}' "$RUNNING_ID")"
+  fi
+fi
+
+compose() {
+  API_IMAGE="$NEW_API_IMAGE" MIGRATE_IMAGE="$NEW_MIGRATE_IMAGE" \
+    docker compose --project-directory "$APP_DIR" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" "$@"
+}
+
+rollback() {
+  local status=$?
+  trap - ERR
+  if [[ -n "$PREVIOUS_IMAGE" ]]; then
+    echo "Deployment failed; restoring API image $PREVIOUS_IMAGE" >&2
+    API_IMAGE="$PREVIOUS_IMAGE" MIGRATE_IMAGE="$NEW_MIGRATE_IMAGE" \
+      docker compose --project-directory "$APP_DIR" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" pull api || true
+    API_IMAGE="$PREVIOUS_IMAGE" MIGRATE_IMAGE="$NEW_MIGRATE_IMAGE" \
+      docker compose --project-directory "$APP_DIR" --env-file "$ENV_FILE" -f "$COMPOSE_FILE" up -d --no-deps api || true
+  else
+    echo "Deployment failed and no previous API image was recorded; inspect the service before retrying." >&2
+  fi
+  exit "$status"
+}
+trap rollback ERR
+
+for attempt in $(seq 1 30); do
+  if docker exec "$MYSQL_CONTAINER" mysqladmin ping --host=127.0.0.1 --silent >/dev/null 2>&1; then break; fi
+  if [[ "$attempt" == 30 ]]; then echo "Existing MySQL container did not become ready." >&2; false; fi
+  sleep 2
+done
+
+compose pull migrate api
+compose run --rm migrate
+compose up -d --no-deps api
+
+healthy=false
+for attempt in $(seq 1 30); do
+  if curl --fail --silent --show-error "$HEALTH_URL" >/dev/null; then healthy=true; break; fi
+  sleep 2
+done
+[[ "$healthy" == true ]] || { echo "API health check failed at $HEALTH_URL." >&2; false; }
+
+printf '%s\n' "$NEW_API_IMAGE" > "$STATE_FILE.tmp"
+chmod 600 "$STATE_FILE.tmp"
+mv "$STATE_FILE.tmp" "$STATE_FILE"
+trap - ERR
+echo "Deployed and health-checked $NEW_API_IMAGE"

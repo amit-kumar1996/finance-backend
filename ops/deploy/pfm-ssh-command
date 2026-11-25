@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+command="${SSH_ORIGINAL_COMMAND:-}"
+if [[ "$command" =~ ^deploy\ ([a-f0-9]{40})$ ]]; then
+  exec sudo -n /usr/local/sbin/pfm-deploy "${BASH_REMATCH[1]}"
+fi
+echo "This SSH key may only request an API deployment." >&2
+exit 2

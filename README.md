@@ -39,3 +39,9 @@ Use the page's **Refresh AMFI NAV** button to update mutual funds. For stocks or
 Run `npm.cmd run lint`, `npm.cmd run type-check`, and `npm.cmd test` for the API checks. `npm.cmd run build` compiles the production server.
 
 The Compose credentials are local development values only. Production credentials belong in the VM's environment and must not be copied into this repository.
+
+## Production deployment
+
+See [DEPLOYMENT.md](DEPLOYMENT.md) for Oracle VM and Cloudflare deployment, TLS/Nginx, private Docker networking to the existing MySQL container, restricted GitHub Actions rollout, health checks, rollback, firewall and smoke tests. It intentionally does not create or replace a database container.
+
+For encrypted database backup configuration and scratch restore instructions, see [ops/backup/README.md](ops/backup/README.md). The production API container has no Docker socket; perform restore tests with the protected VM-side restore script.

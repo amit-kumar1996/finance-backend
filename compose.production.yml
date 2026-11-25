@@ -1,0 +1,74 @@
+services:
+  api:
+    image: ${API_IMAGE:?Set API_IMAGE to the published API image}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+      API_HOST: 0.0.0.0
+      API_PORT: 3000
+      BACKUP_DIRECTORY: /var/lib/pfm/backups
+      NODE_OPTIONS: --max-old-space-size=192
+    ports:
+      - "127.0.0.1:3000:3000"
+    group_add:
+      - "2000"
+    volumes:
+      - ${BACKUP_DIRECTORY_HOST:?Set BACKUP_DIRECTORY_HOST}:/var/lib/pfm/backups:ro
+    networks:
+      - pfm-private
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 320m
+    cpus: 1.0
+    stop_grace_period: 30s
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+  migrate:
+    image: ${MIGRATE_IMAGE:?Set MIGRATE_IMAGE to the matching migration image}
+    env_file:
+      - .env.production
+    environment:
+      NODE_ENV: production
+    networks:
+      - pfm-private
+    read_only: true
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 320m
+    cpus: 1.0
+    logging:
+      options:
+        max-size: 10m
+        max-file: "3"
+
+networks:
+  pfm-private:
+    external: true
+    name: ${PFM_DOCKER_NETWORK:?Set PFM_DOCKER_NETWORK to the existing private Docker network}

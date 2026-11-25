@@ -9,12 +9,13 @@ set -euo pipefail
 : "${BACKUP_DIRECTORY:?Set BACKUP_DIRECTORY to a private directory}"
 : "${RCLONE_REMOTE:?Set RCLONE_REMOTE, for example r2:pfm-backups}"
 : "${BACKUP_RETENTION_DAYS:=35}"
+: "${BACKUP_GROUP:=pfm-backup}"
 
 command -v docker >/dev/null
 command -v age >/dev/null
 command -v rclone >/dev/null
-install -d -m 700 "$BACKUP_DIRECTORY"
-umask 077
+install -d -o root -g "$BACKUP_GROUP" -m 2750 "$BACKUP_DIRECTORY"
+umask 027
 id="$(date -u +%Y%m%dT%H%M%SZ)-$(od -An -N4 -tx1 /dev/urandom | tr -d ' \n')"
 file="$BACKUP_DIRECTORY/$id.sql.age"
 tmp="$file.tmp"
@@ -26,20 +27,23 @@ docker exec -e MYSQL_PWD="$MYSQL_PASSWORD" "$MYSQL_CONTAINER" \
   mysqldump --user="$MYSQL_USER" --single-transaction --quick --skip-lock-tables \
     --routines --events --triggers --hex-blob --default-character-set=utf8mb4 "$MYSQL_DATABASE" \
   | age --encrypt --recipient "$AGE_RECIPIENT" --output "$tmp"
-chmod 600 "$tmp"
+chmod 640 "$tmp"
+chgrp "$BACKUP_GROUP" "$tmp"
 mv "$tmp" "$file"
 sha="$(sha256sum "$file" | cut -d ' ' -f1)"
 size="$(stat -c '%s' "$file")"
 created="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 printf '{"id":"%s","createdAt":"%s","fileName":"%s.sql.age","sizeBytes":%s,"sha256":"%s","encryption":"age","offsite":"pending"}\n' \
   "$id" "$created" "$id" "$size" "$sha" > "$manifest_tmp"
-chmod 600 "$manifest_tmp"
+chmod 640 "$manifest_tmp"
+chgrp "$BACKUP_GROUP" "$manifest_tmp"
 mv "$manifest_tmp" "$manifest"
 
 # Copy only encrypted artifacts and their manifest. The VM copy remains usable if off-site sync fails.
 if rclone copyto "$file" "$RCLONE_REMOTE/$id.sql.age" && rclone copyto "$manifest" "$RCLONE_REMOTE/$id.json"; then
   sed 's/"offsite":"pending"/"offsite":"copied"/' "$manifest" > "$manifest_tmp"
-  chmod 600 "$manifest_tmp"
+  chmod 640 "$manifest_tmp"
+  chgrp "$BACKUP_GROUP" "$manifest_tmp"
   mv "$manifest_tmp" "$manifest"
   rclone copyto "$manifest" "$RCLONE_REMOTE/$id.json"
 else

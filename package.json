@@ -35,7 +35,7 @@
     "@types/express": "5.0.6",
     "@types/node": "26.6.6",
     "@types/supertest": "6.0.3",
-    "concurrently": "9.2.1",
+    "concurrently": "9.2.5",
     "eslint": "10.15.0",
     "eslint-config-prettier": "10.1.8",
     "globals": "17.4.0",
@@ -44,8 +44,11 @@
     "supertest": "7.1.4",
     "tsx": "4.23.15",
     "typescript": "5.9.3",
-    "typescript-eslint": "8.57.0",
+    "typescript-eslint": "8.74.0",
     "vitest": "5.1.1"
+  },
+  "overrides": {
+    "effect": "3.22.1"
   },
   "engines": {
     "node": ">=22.13.0"
