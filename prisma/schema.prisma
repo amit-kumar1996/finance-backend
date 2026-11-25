@@ -258,7 +258,7 @@ model PersonTransaction {
   person         Person              @relation(fields: [personId], references: [id], onDelete: Restrict)
 
   @@unique([userId, idempotencyKey])
-  @@index([userId, personId, effectiveDate, createdAt])
+  @@index([userId, personId, effectiveDate, createdAt], map: "person_tx_user_person_date_created_idx")
   @@map("person_transactions")
 }
 

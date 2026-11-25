@@ -14,7 +14,7 @@ CREATE TABLE `person_transactions` (
   `idempotency_key` VARCHAR(128) NOT NULL,
   `request_hash` CHAR(64) NOT NULL,
   `created_at` DATETIME(3) NOT NULL DEFAULT CURRENT_TIMESTAMP(3),
-  INDEX `person_transactions_user_id_person_id_effective_date_created_at_idx` (`user_id`, `person_id`, `effective_date`, `created_at`),
+  INDEX `person_tx_user_person_date_created_idx` (`user_id`, `person_id`, `effective_date`, `created_at`),
   UNIQUE INDEX `person_transactions_user_id_idempotency_key_key` (`user_id`, `idempotency_key`),
   PRIMARY KEY (`id`),
   CONSTRAINT `person_transactions_user_id_fkey` FOREIGN KEY (`user_id`) REFERENCES `users` (`id`) ON DELETE CASCADE ON UPDATE CASCADE,
