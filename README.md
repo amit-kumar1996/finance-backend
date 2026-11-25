@@ -18,6 +18,14 @@ The first registration displays ten recovery codes once. Save them privately. Ea
 
 The server uses the configured exact frontend origin for CORS and WebAuthn origin checks. State-changing API calls also require that origin and a CSRF token. A request from a page served at `127.0.0.1` will not match the default `localhost` origin settings.
 
+## Formal loans and EMI
+
+The Loans & EMI page supports a new disbursement into a bank, cash, or UPI account, or recording an already-existing outstanding loan. A disbursement debits the receiving asset and credits a loan liability; an existing loan is offset against opening-balance equity and does not change a cash account. The reducing-balance schedule uses the entered annual rate divided by 12 and rounds each period's interest to paise.
+
+When recording an EMI, enter its total along with the principal and interest portions. The API requires the total to equal those parts. Principal debits the loan liability, interest debits general expenses, and the selected account is credited for the amount paid. A principal prepayment debits the liability and credits the selected account. Every posting is atomic, audited, and idempotent. Partial payments can be recorded without marking the scheduled installment complete; mark it complete when the remaining payment finishes that installment. The page recalculates future dates and balances from the ledger and shows overdue dates as due reminders.
+
+The API routes are `GET/POST /api/v1/loans`, `POST /api/v1/loans/:loanId/payments`, and `POST /api/v1/loans/:loanId/prepayments`. Local development applies the loan migration through `npm.cmd run dev` or `npm.cmd run db:deploy`.
+
 Run `npm.cmd run lint`, `npm.cmd run type-check`, and `npm.cmd test` for the API checks. `npm.cmd run build` compiles the production server.
 
 The Compose credentials are local development values only. Production credentials belong in the VM's environment and must not be copied into this repository.

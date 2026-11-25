@@ -15,6 +15,7 @@ export const createApp = (
   accountsRouter?: Router,
   peopleRouter?: Router,
   expensesRouter?: Router,
+  loansRouter?: Router,
 ): Express => {
   const app = express();
 
@@ -55,6 +56,7 @@ export const createApp = (
   if (accountsRouter) app.use("/api/v1", accountsRouter);
   if (peopleRouter) app.use("/api/v1", peopleRouter);
   if (expensesRouter) app.use("/api/v1", expensesRouter);
+  if (loansRouter) app.use("/api/v1", loansRouter);
   app.use("/api/v1", createHealthRouter(checkDatabase));
   app.use((_request, response) => {
     response.status(404).json({

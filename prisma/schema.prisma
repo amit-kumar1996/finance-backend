@@ -43,6 +43,15 @@ enum LedgerTransactionSource {
   PERSON_RECEIVE
   PERSON_BORROW
   PERSON_REPAY
+  LOAN_DISBURSEMENT
+  LOAN_OPENING_BALANCE
+  LOAN_EMI_PAYMENT
+  LOAN_PREPAYMENT
+}
+
+enum LoanStatus {
+  ACTIVE
+  CLOSED
 }
 
 model User {
@@ -61,6 +70,7 @@ model User {
   auditLogs               AuditLog[]
   persons                 Person[]
   idempotencyRecords      IdempotencyRecord[]
+  loans                   Loan[]
   defaultExpenseAccount   FinancialAccount?    @relation("DefaultExpenseAccount", fields: [defaultExpenseAccountId], references: [id], onDelete: SetNull)
 
   @@map("users")
@@ -160,6 +170,7 @@ model LedgerAccount {
   entries          TransactionEntry[]
   personReceivable Person?               @relation("PersonReceivable")
   personPayable    Person?               @relation("PersonPayable")
+  loan             Loan?                 @relation("LoanLiability")
 
   @@unique([userId, code])
   @@index([userId, category])
@@ -208,15 +219,45 @@ model LedgerTransaction {
   idempotencyKey String                  @map("idempotency_key") @db.VarChar(128)
   requestHash    String                  @map("request_hash") @db.Char(64)
   reversalOfId   String?                 @unique @map("reversal_of_id") @db.VarChar(30)
+  loanId         String?                 @map("loan_id") @db.VarChar(30)
+  countsAsEmi    Boolean                 @default(true) @map("counts_as_emi")
   createdAt      DateTime                @default(now()) @map("created_at") @db.DateTime(3)
   user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
   reversalOf     LedgerTransaction?      @relation("LedgerTransactionReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
   reversedBy     LedgerTransaction?      @relation("LedgerTransactionReversals")
+  loan           Loan?                   @relation(fields: [loanId], references: [id], onDelete: Restrict)
   entries        TransactionEntry[]
 
   @@unique([userId, idempotencyKey])
   @@index([userId, effectiveDate])
+  @@index([loanId, effectiveDate])
   @@map("ledger_transactions")
+}
+
+model Loan {
+  id                 String              @id @default(cuid()) @db.VarChar(30)
+  userId             String              @map("user_id") @db.VarChar(30)
+  name               String              @db.VarChar(120)
+  provider           String              @db.VarChar(120)
+  principal          Decimal             @db.Decimal(18, 2)
+  annualRate         Decimal             @map("annual_rate") @db.Decimal(7, 4)
+  termMonths         Int                 @map("term_months") @db.UnsignedSmallInt
+  emiAmount          Decimal             @map("emi_amount") @db.Decimal(18, 2)
+  dueDay             Int                 @map("due_day") @db.UnsignedTinyInt
+  startDate          DateTime            @map("start_date") @db.Date
+  liabilityAccountId String              @unique @map("liability_account_id") @db.VarChar(30)
+  status             LoanStatus          @default(ACTIVE)
+  idempotencyKey     String              @map("idempotency_key") @db.VarChar(128)
+  requestHash        String              @map("request_hash") @db.Char(64)
+  createdAt          DateTime            @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt          DateTime            @updatedAt @map("updated_at") @db.DateTime(3)
+  user               User                @relation(fields: [userId], references: [id], onDelete: Cascade)
+  liabilityAccount   LedgerAccount       @relation("LoanLiability", fields: [liabilityAccountId], references: [id], onDelete: Restrict)
+  transactions       LedgerTransaction[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, status, startDate])
+  @@map("loans")
 }
 
 model TransactionEntry {

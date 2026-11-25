@@ -11,7 +11,11 @@ export type LedgerTransactionSource =
   | "PERSON_GIVE"
   | "PERSON_RECEIVE"
   | "PERSON_BORROW"
-  | "PERSON_REPAY";
+  | "PERSON_REPAY"
+  | "LOAN_DISBURSEMENT"
+  | "LOAN_OPENING_BALANCE"
+  | "LOAN_EMI_PAYMENT"
+  | "LOAN_PREPAYMENT";
 
 export interface AccountSummary {
   id: string;
