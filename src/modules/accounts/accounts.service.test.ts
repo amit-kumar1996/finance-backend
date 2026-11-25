@@ -399,6 +399,34 @@ describe("double-entry accounts and ledger", () => {
     ).toBe("1000.00");
   });
 
+  it("posts a card expense as an expense and increases the selected card liability", async () => {
+    const { service } = newService();
+    const card = await makeAccount(service, "user-a", "card", "CREDIT_CARD", "0.00");
+
+    const transaction = await service.expense("user-a", "card-expense-1", {
+      accountId: card.id,
+      effectiveDate: "2026-11-25",
+      amount: "750.00",
+      description: "Train ticket",
+    });
+
+    expect(transaction.source).toBe("EXPENSE");
+    expect(
+      (await service.listAccounts("user-a")).find((account) => account.id === card.id)
+        ?.balance,
+    ).toBe("750.00");
+    expect(
+      transaction.entries
+        .reduce((total, entry) => total.plus(entry.debitAmount), new Prisma.Decimal(0))
+        .toFixed(2),
+    ).toBe("750.00");
+    expect(
+      transaction.entries
+        .reduce((total, entry) => total.plus(entry.creditAmount), new Prisma.Decimal(0))
+        .toFixed(2),
+    ).toBe("750.00");
+  });
+
   it("posts a three-field expense through the configured default spending account", async () => {
     const { service } = newService();
     const bank = await makeAccount(service, "user-a", "bank", "BANK", "1000.00");

@@ -678,9 +678,8 @@ export class PrismaAccountsRepository implements AccountsRepository {
           where: {
             userId: input.userId,
             ledgerAccountId: { in: originalLedgerIds },
-            accountType: { in: ["BANK", "CASH", "UPI"] },
           },
-          select: { id: true, ledgerAccountId: true },
+          select: { id: true, ledgerAccountId: true, accountType: true },
         });
         if (!sourceAccount) {
           throw new HttpError(
@@ -785,7 +784,10 @@ export class PrismaAccountsRepository implements AccountsRepository {
 
         const account = await tx.ledgerAccount.findUnique({
           where: { id: sourceAccount.ledgerAccountId },
-          select: { normalBalance: true, financialAccount: { select: { id: true } } },
+          select: {
+            normalBalance: true,
+            financialAccount: { select: { id: true, accountType: true } },
+          },
         });
         if (!account?.financialAccount) {
           throw new HttpError(
@@ -818,7 +820,11 @@ export class PrismaAccountsRepository implements AccountsRepository {
             (sum, entry) => sum.plus(entry.debitAmount).minus(entry.creditAmount),
             new Prisma.Decimal(0),
           );
-        if (change.lt(0) && currentBalance.plus(change).lt(0)) {
+        if (
+          account.financialAccount.accountType !== "CREDIT_CARD" &&
+          change.lt(0) &&
+          currentBalance.plus(change).lt(0)
+        ) {
           throw new HttpError(
             409,
             "INSUFFICIENT_FUNDS",

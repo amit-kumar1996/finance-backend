@@ -31,13 +31,19 @@ export class ExpensesService {
   async createExpense(
     userId: string,
     idempotencyKey: string,
-    input: { effectiveDate: string; amount: string; description: string },
+    input: {
+      effectiveDate: string;
+      amount: string;
+      description: string;
+      accountId?: string | undefined;
+    },
   ) {
-    const transaction = await this.accounts.expenseUsingDefault(
-      userId,
-      idempotencyKey,
-      input,
-    );
+    const transaction = input.accountId
+      ? await this.accounts.expense(userId, idempotencyKey, {
+          ...input,
+          accountId: input.accountId,
+        })
+      : await this.accounts.expenseUsingDefault(userId, idempotencyKey, input);
     return { transaction };
   }
 

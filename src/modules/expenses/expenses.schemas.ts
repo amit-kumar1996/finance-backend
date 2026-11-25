@@ -6,6 +6,7 @@ export const expenseFormSchema = z.object({
   effectiveDate: dateString,
   description: z.string().trim().min(1).max(250),
   amount: z.string().regex(/^(?:0|[1-9]\d{0,15})(?:\.\d{1,4})?$/),
+  accountId: z.string().min(1).max(30).optional(),
 });
 
 export const expenseQuerySchema = z.object({

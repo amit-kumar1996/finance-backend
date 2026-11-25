@@ -271,7 +271,7 @@ export class AccountsService {
       description: string;
     },
   ): Promise<LedgerTransactionRecord> {
-    const account = await this.requireAssetAccount(userId, input.accountId);
+    const account = await this.requireAccount(userId, input.accountId);
     const amount = formatMoney(parseMoney(input.amount));
     const expenseAccountId = await this.repository.getSystemLedgerAccountId(
       userId,
