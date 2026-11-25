@@ -26,6 +26,9 @@ import { PrismaNetWorthRepository } from "./modules/net-worth/prisma-net-worth.r
 import { NetWorthService } from "./modules/net-worth/net-worth.service.js";
 import { createNetWorthRouter } from "./modules/net-worth/net-worth.routes.js";
 import { startDailyPortfolioJobs } from "./modules/net-worth/daily-jobs.js";
+import { SyncService } from "./modules/sync/sync.service.js";
+import { PrismaSyncRepository } from "./modules/sync/prisma-sync.repository.js";
+import { createSyncRouter } from "./modules/sync/sync.routes.js";
 
 const authConfig = {
   rpId: env.WEBAUTHN_RP_ID,
@@ -91,6 +94,19 @@ const app = createApp(
     env.NODE_ENV === "production",
   ),
   createNetWorthRouter(netWorthService, authService, env.NODE_ENV === "production"),
+  createSyncRouter(
+    new SyncService(
+      new PrismaSyncRepository(prisma),
+      expensesService,
+      accountsService,
+      peopleService,
+      loansService,
+      investmentsService,
+    ),
+    authService,
+    authConfig,
+    env.NODE_ENV === "production",
+  ),
 );
 
 const dailyJobs = startDailyPortfolioJobs(
