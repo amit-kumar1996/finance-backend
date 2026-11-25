@@ -101,6 +101,7 @@ model User {
   loans                   Loan[]
   investments             Investment[]
   investmentActivities    InvestmentActivity[]
+  netWorthSnapshots       NetWorthSnapshot[]
   defaultExpenseAccount   FinancialAccount?    @relation("DefaultExpenseAccount", fields: [defaultExpenseAccountId], references: [id], onDelete: SetNull)
 
   @@map("users")
@@ -377,6 +378,23 @@ model InvestmentValuation {
 
   @@index([investmentId, effectiveDate])
   @@map("investment_valuations")
+}
+
+model NetWorthSnapshot {
+  id                 String   @id @default(cuid()) @db.VarChar(30)
+  userId             String   @map("user_id") @db.VarChar(30)
+  snapshotDate       DateTime @map("snapshot_date") @db.Date
+  totalAssets        Decimal  @map("total_assets") @db.Decimal(18, 2)
+  totalLiabilities   Decimal  @map("total_liabilities") @db.Decimal(18, 2)
+  netWorth           Decimal  @map("net_worth") @db.Decimal(18, 2)
+  assetBreakdown     Json     @map("asset_breakdown")
+  liabilityBreakdown Json     @map("liability_breakdown")
+  createdAt          DateTime @default(now()) @map("created_at") @db.DateTime(3)
+  user               User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, snapshotDate])
+  @@index([userId, snapshotDate])
+  @@map("net_worth_snapshots")
 }
 
 model TransactionEntry {

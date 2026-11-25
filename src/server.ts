@@ -22,6 +22,10 @@ import { InvestmentsService } from "./modules/investments/investments.service.js
 import { AmfiNavAdapter } from "./modules/investments/amfi-nav.js";
 import { PrismaInvestmentsRepository } from "./modules/investments/prisma-investments.repository.js";
 import { createInvestmentsRouter } from "./modules/investments/investments.routes.js";
+import { PrismaNetWorthRepository } from "./modules/net-worth/prisma-net-worth.repository.js";
+import { NetWorthService } from "./modules/net-worth/net-worth.service.js";
+import { createNetWorthRouter } from "./modules/net-worth/net-worth.routes.js";
+import { startDailyPortfolioJobs } from "./modules/net-worth/daily-jobs.js";
 
 const authConfig = {
   rpId: env.WEBAUTHN_RP_ID,
@@ -49,6 +53,11 @@ const loansService = new LoansService(new PrismaLoansRepository(prisma));
 const investmentsService = new InvestmentsService(
   new PrismaInvestmentsRepository(prisma),
   new AmfiNavAdapter(env.AMFI_NAV_URL),
+);
+const netWorthService = new NetWorthService(
+  new PrismaNetWorthRepository(prisma),
+  loansService,
+  investmentsService,
 );
 
 const app = createApp(
@@ -81,6 +90,14 @@ const app = createApp(
     authConfig,
     env.NODE_ENV === "production",
   ),
+  createNetWorthRouter(netWorthService, authService, env.NODE_ENV === "production"),
+);
+
+const dailyJobs = startDailyPortfolioJobs(
+  prisma,
+  netWorthService,
+  investmentsService,
+  logger,
 );
 
 const server = app.listen(env.API_PORT, env.API_HOST, () => {
@@ -89,6 +106,7 @@ const server = app.listen(env.API_PORT, env.API_HOST, () => {
 
 const shutdown = async (signal: string): Promise<void> => {
   logger.info({ signal }, "Shutting down API");
+  dailyJobs.stop();
   server.close(async () => {
     await prisma.$disconnect();
     process.exit(0);

@@ -192,6 +192,7 @@ export class InvestmentsService {
     }
     const investments = await this.repository.list(userId, "MUTUAL_FUND");
     let updated = 0;
+    let manualOverrides = 0;
     const missing: string[] = [];
     const sourceDates = new Set<string>();
     for (const investment of investments) {
@@ -202,6 +203,10 @@ export class InvestmentsService {
         continue;
       }
       sourceDates.add(quote.date);
+      if (investment.priceSource === "MANUAL" && investment.priceDate === quote.date) {
+        manualOverrides += 1;
+        continue;
+      }
       const key = `${this.amfiAdapter.source}:${investment.id}:${quote.date}:${fingerprint(quote.price).slice(0, 12)}`;
       await this.updatePrice(userId, investment.id, key, {
         effectiveDate: quote.date,
@@ -212,6 +217,7 @@ export class InvestmentsService {
     }
     return {
       updated,
+      manualOverrides,
       missing,
       sourceDates: [...sourceDates].sort(),
       source: this.amfiAdapter.source,
