@@ -19,6 +19,7 @@ export const createApp = (
   investmentsRouter?: Router,
   netWorthRouter?: Router,
   syncRouter?: Router,
+  backupsRouter?: Router,
 ): Express => {
   const app = express();
 
@@ -63,6 +64,7 @@ export const createApp = (
   if (investmentsRouter) app.use("/api/v1", investmentsRouter);
   if (netWorthRouter) app.use("/api/v1", netWorthRouter);
   if (syncRouter) app.use("/api/v1", syncRouter);
+  if (backupsRouter) app.use("/api/v1", backupsRouter);
   app.use("/api/v1", createHealthRouter(checkDatabase));
   app.use((_request, response) => {
     response.status(404).json({

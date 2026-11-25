@@ -20,6 +20,8 @@ const envSchema = z.object({
     .url()
     .default("mysql://pfm:pfm-local-only@127.0.0.1:3306/personal_finance"),
   AMFI_NAV_URL: z.url().default("https://portal.amfiindia.com/spages/NAVAll.txt"),
+  BACKUP_DIRECTORY: z.string().default("./var/backups"),
+  BACKUP_RESTORE_SCRIPT: z.string().optional(),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

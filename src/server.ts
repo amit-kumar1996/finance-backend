@@ -29,6 +29,8 @@ import { startDailyPortfolioJobs } from "./modules/net-worth/daily-jobs.js";
 import { SyncService } from "./modules/sync/sync.service.js";
 import { PrismaSyncRepository } from "./modules/sync/prisma-sync.repository.js";
 import { createSyncRouter } from "./modules/sync/sync.routes.js";
+import { BackupsService } from "./modules/backups/backups.service.js";
+import { createBackupsRouter } from "./modules/backups/backups.routes.js";
 
 const authConfig = {
   rpId: env.WEBAUTHN_RP_ID,
@@ -105,6 +107,13 @@ const app = createApp(
     ),
     authService,
     authConfig,
+    env.NODE_ENV === "production",
+  ),
+  createBackupsRouter(
+    new BackupsService(env.BACKUP_DIRECTORY, env.BACKUP_RESTORE_SCRIPT),
+    authService,
+    prisma,
+    env.WEB_ORIGIN,
     env.NODE_ENV === "production",
   ),
 );
