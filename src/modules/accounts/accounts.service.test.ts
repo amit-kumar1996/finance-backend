@@ -423,6 +423,29 @@ describe("double-entry accounts and ledger", () => {
     ).toBe("0.00");
   });
 
+  it("uses the first bank, cash, or UPI account when no expense default is configured", async () => {
+    const { service } = newService();
+    const card = await makeAccount(service, "user-a", "card", "CREDIT_CARD", "0.00");
+    const bank = await makeAccount(service, "user-a", "bank", "BANK", "2500.00");
+
+    const transaction = await service.expenseUsingDefault("user-a", "fallback-expense", {
+      effectiveDate: "2026-11-25",
+      amount: "500.00",
+      description: "Groceries",
+    });
+
+    expect(transaction.source).toBe("EXPENSE");
+    expect(
+      (await service.listAccounts("user-a")).find((account) => account.id === bank.id)
+        ?.balance,
+    ).toBe("2000.00");
+    expect(
+      (await service.listAccounts("user-a")).find((account) => account.id === card.id)
+        ?.balance,
+    ).toBe("0.00");
+    expect((await service.getDefaultExpenseAccount("user-a"))?.id).toBe(bank.id);
+  });
+
   it("tracks money given and received as a per-person receivable", async () => {
     const { repository, service } = newService();
     const bank = await makeAccount(service, "user-a", "bank", "BANK", "10000.00");

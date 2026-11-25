@@ -41,8 +41,11 @@ export class AccountsService {
     return this.repository.listAccounts(userId);
   }
 
-  getDefaultExpenseAccount(userId: string): Promise<AccountSummary | null> {
-    return this.repository.getDefaultExpenseAccount(userId);
+  async getDefaultExpenseAccount(userId: string): Promise<AccountSummary | null> {
+    const configured = await this.repository.getDefaultExpenseAccount(userId);
+    if (configured && configured.accountType !== "CREDIT_CARD") return configured;
+    const accounts = await this.repository.listAccounts(userId);
+    return accounts.find((account) => account.accountType !== "CREDIT_CARD") ?? null;
   }
 
   async setDefaultExpenseAccount(
@@ -57,7 +60,7 @@ export class AccountsService {
       idempotencyKey,
       requestHash,
     );
-    return this.repository.getDefaultExpenseAccount(userId);
+    return this.getDefaultExpenseAccount(userId);
   }
 
   async expenseUsingDefault(
@@ -90,7 +93,7 @@ export class AccountsService {
       }
       return existing;
     }
-    const account = await this.repository.getDefaultExpenseAccount(userId);
+    const account = await this.getDefaultExpenseAccount(userId);
     if (!account) {
       throw new HttpError(
         409,
