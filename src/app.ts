@@ -42,19 +42,26 @@ export const createApp = (
     }),
   );
   app.use(express.json({ limit: "100kb" }));
+  const passkeyAttemptLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    limit: 10,
+    standardHeaders: "draft-8",
+    legacyHeaders: false,
+    handler: (_request, response) => {
+      response.status(429).json({
+        error: { code: "RATE_LIMITED", message: "Too many authentication requests." },
+      });
+    },
+  });
   app.use(
-    "/api/v1/auth",
-    rateLimit({
-      windowMs: 15 * 60 * 1000,
-      limit: 10,
-      standardHeaders: "draft-8",
-      legacyHeaders: false,
-      handler: (_request, response) => {
-        response.status(429).json({
-          error: { code: "RATE_LIMITED", message: "Too many authentication requests." },
-        });
-      },
-    }),
+    [
+      "/api/v1/auth/register/options",
+      "/api/v1/auth/register/verify",
+      "/api/v1/auth/login/options",
+      "/api/v1/auth/login/verify",
+      "/api/v1/auth/recovery/verify",
+    ],
+    passkeyAttemptLimiter,
   );
   if (authRouter) app.use("/api/v1/auth", authRouter);
   if (accountsRouter) app.use("/api/v1", accountsRouter);
