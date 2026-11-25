@@ -15,7 +15,12 @@ export type LedgerTransactionSource =
   | "LOAN_DISBURSEMENT"
   | "LOAN_OPENING_BALANCE"
   | "LOAN_EMI_PAYMENT"
-  | "LOAN_PREPAYMENT";
+  | "LOAN_PREPAYMENT"
+  | "INVESTMENT_BUY"
+  | "INVESTMENT_SELL"
+  | "INVESTMENT_CONTRIBUTION"
+  | "INVESTMENT_WITHDRAWAL"
+  | "INVESTMENT_VALUATION";
 
 export interface AccountSummary {
   id: string;

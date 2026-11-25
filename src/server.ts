@@ -18,6 +18,10 @@ import { createExpensesRouter } from "./modules/expenses/expenses.routes.js";
 import { LoansService } from "./modules/loans/loans.service.js";
 import { PrismaLoansRepository } from "./modules/loans/prisma-loans.repository.js";
 import { createLoansRouter } from "./modules/loans/loans.routes.js";
+import { InvestmentsService } from "./modules/investments/investments.service.js";
+import { AmfiNavAdapter } from "./modules/investments/amfi-nav.js";
+import { PrismaInvestmentsRepository } from "./modules/investments/prisma-investments.repository.js";
+import { createInvestmentsRouter } from "./modules/investments/investments.routes.js";
 
 const authConfig = {
   rpId: env.WEBAUTHN_RP_ID,
@@ -42,6 +46,10 @@ const expensesService = new ExpensesService(
   accountsService,
 );
 const loansService = new LoansService(new PrismaLoansRepository(prisma));
+const investmentsService = new InvestmentsService(
+  new PrismaInvestmentsRepository(prisma),
+  new AmfiNavAdapter(env.AMFI_NAV_URL),
+);
 
 const app = createApp(
   async () => {
@@ -67,6 +75,12 @@ const app = createApp(
     env.NODE_ENV === "production",
   ),
   createLoansRouter(loansService, authService, authConfig, env.NODE_ENV === "production"),
+  createInvestmentsRouter(
+    investmentsService,
+    authService,
+    authConfig,
+    env.NODE_ENV === "production",
+  ),
 );
 
 const server = app.listen(env.API_PORT, env.API_HOST, () => {

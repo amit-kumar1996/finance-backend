@@ -19,6 +19,7 @@ const envSchema = z.object({
   DATABASE_URL: z
     .url()
     .default("mysql://pfm:pfm-local-only@127.0.0.1:3306/personal_finance"),
+  AMFI_NAV_URL: z.url().default("https://portal.amfiindia.com/spages/NAVAll.txt"),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

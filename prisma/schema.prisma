@@ -47,11 +47,39 @@ enum LedgerTransactionSource {
   LOAN_OPENING_BALANCE
   LOAN_EMI_PAYMENT
   LOAN_PREPAYMENT
+  INVESTMENT_BUY
+  INVESTMENT_SELL
+  INVESTMENT_CONTRIBUTION
+  INVESTMENT_WITHDRAWAL
+  INVESTMENT_VALUATION
 }
 
 enum LoanStatus {
   ACTIVE
   CLOSED
+}
+
+enum InvestmentType {
+  NPS
+  MUTUAL_FUND
+  STOCK
+  FD
+  PPF
+  EPF
+}
+
+enum InvestmentActivityType {
+  BUY
+  SELL
+  CONTRIBUTION
+  WITHDRAWAL
+  VALUATION
+}
+
+enum InvestmentPriceSource {
+  AMFI
+  MANUAL
+  PROVIDER
 }
 
 model User {
@@ -71,6 +99,8 @@ model User {
   persons                 Person[]
   idempotencyRecords      IdempotencyRecord[]
   loans                   Loan[]
+  investments             Investment[]
+  investmentActivities    InvestmentActivity[]
   defaultExpenseAccount   FinancialAccount?    @relation("DefaultExpenseAccount", fields: [defaultExpenseAccountId], references: [id], onDelete: SetNull)
 
   @@map("users")
@@ -171,6 +201,7 @@ model LedgerAccount {
   personReceivable Person?               @relation("PersonReceivable")
   personPayable    Person?               @relation("PersonPayable")
   loan             Loan?                 @relation("LoanLiability")
+  investment       Investment?           @relation("InvestmentAsset")
 
   @@unique([userId, code])
   @@index([userId, category])
@@ -211,26 +242,31 @@ model IdempotencyRecord {
 }
 
 model LedgerTransaction {
-  id             String                  @id @default(cuid()) @db.VarChar(30)
-  userId         String                  @map("user_id") @db.VarChar(30)
-  effectiveDate  DateTime                @map("effective_date") @db.Date
-  description    String                  @db.VarChar(250)
-  source         LedgerTransactionSource
-  idempotencyKey String                  @map("idempotency_key") @db.VarChar(128)
-  requestHash    String                  @map("request_hash") @db.Char(64)
-  reversalOfId   String?                 @unique @map("reversal_of_id") @db.VarChar(30)
-  loanId         String?                 @map("loan_id") @db.VarChar(30)
-  countsAsEmi    Boolean                 @default(true) @map("counts_as_emi")
-  createdAt      DateTime                @default(now()) @map("created_at") @db.DateTime(3)
-  user           User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
-  reversalOf     LedgerTransaction?      @relation("LedgerTransactionReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
-  reversedBy     LedgerTransaction?      @relation("LedgerTransactionReversals")
-  loan           Loan?                   @relation(fields: [loanId], references: [id], onDelete: Restrict)
-  entries        TransactionEntry[]
+  id                  String                  @id @default(cuid()) @db.VarChar(30)
+  userId              String                  @map("user_id") @db.VarChar(30)
+  effectiveDate       DateTime                @map("effective_date") @db.Date
+  description         String                  @db.VarChar(250)
+  source              LedgerTransactionSource
+  idempotencyKey      String                  @map("idempotency_key") @db.VarChar(128)
+  requestHash         String                  @map("request_hash") @db.Char(64)
+  reversalOfId        String?                 @unique @map("reversal_of_id") @db.VarChar(30)
+  loanId              String?                 @map("loan_id") @db.VarChar(30)
+  countsAsEmi         Boolean                 @default(true) @map("counts_as_emi")
+  investmentId        String?                 @map("investment_id") @db.VarChar(30)
+  createdAt           DateTime                @default(now()) @map("created_at") @db.DateTime(3)
+  user                User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reversalOf          LedgerTransaction?      @relation("LedgerTransactionReversals", fields: [reversalOfId], references: [id], onDelete: Restrict)
+  reversedBy          LedgerTransaction?      @relation("LedgerTransactionReversals")
+  loan                Loan?                   @relation(fields: [loanId], references: [id], onDelete: Restrict)
+  investment          Investment?             @relation(fields: [investmentId], references: [id], onDelete: Restrict)
+  investmentActivity  InvestmentActivity?
+  investmentValuation InvestmentValuation?
+  entries             TransactionEntry[]
 
   @@unique([userId, idempotencyKey])
   @@index([userId, effectiveDate])
   @@index([loanId, effectiveDate])
+  @@index([investmentId, effectiveDate])
   @@map("ledger_transactions")
 }
 
@@ -258,6 +294,89 @@ model Loan {
   @@unique([userId, idempotencyKey])
   @@index([userId, status, startDate])
   @@map("loans")
+}
+
+model Investment {
+  id                 String                    @id @default(cuid()) @db.VarChar(30)
+  userId             String                    @map("user_id") @db.VarChar(30)
+  investmentType     InvestmentType            @map("investment_type")
+  name               String                    @db.VarChar(160)
+  provider           String?                   @db.VarChar(120)
+  symbol             String?                   @db.VarChar(32)
+  annualRate         Decimal?                  @map("annual_rate") @db.Decimal(7, 4)
+  maturityDate       DateTime?                 @map("maturity_date") @db.Date
+  ledgerAccountId    String                    @unique @map("ledger_account_id") @db.VarChar(30)
+  idempotencyKey     String                    @map("idempotency_key") @db.VarChar(128)
+  requestHash        String                    @map("request_hash") @db.Char(64)
+  createdAt          DateTime                  @default(now()) @map("created_at") @db.DateTime(3)
+  updatedAt          DateTime                  @updatedAt @map("updated_at") @db.DateTime(3)
+  user               User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerAccount      LedgerAccount             @relation("InvestmentAsset", fields: [ledgerAccountId], references: [id], onDelete: Restrict)
+  activities         InvestmentActivity[]
+  prices             InvestmentPriceSnapshot[]
+  valuations         InvestmentValuation[]
+  ledgerTransactions LedgerTransaction[]
+
+  @@unique([userId, idempotencyKey])
+  @@index([userId, investmentType, name])
+  @@map("investments")
+}
+
+model InvestmentActivity {
+  id                  String                 @id @default(cuid()) @db.VarChar(30)
+  userId              String                 @map("user_id") @db.VarChar(30)
+  investmentId        String                 @map("investment_id") @db.VarChar(30)
+  ledgerTransactionId String                 @unique @map("ledger_transaction_id") @db.VarChar(30)
+  activityType        InvestmentActivityType @map("activity_type")
+  effectiveDate       DateTime               @map("effective_date") @db.Date
+  units               Decimal?               @db.Decimal(24, 8)
+  unitPrice           Decimal?               @map("unit_price") @db.Decimal(18, 8)
+  amount              Decimal                @db.Decimal(18, 2)
+  costBasisAmount     Decimal?               @map("cost_basis_amount") @db.Decimal(18, 2)
+  note                String?                @db.VarChar(250)
+  idempotencyKey      String                 @map("idempotency_key") @db.VarChar(128)
+  requestHash         String                 @map("request_hash") @db.Char(64)
+  createdAt           DateTime               @default(now()) @map("created_at") @db.DateTime(3)
+  user                User                   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  investment          Investment             @relation(fields: [investmentId], references: [id], onDelete: Restrict)
+  ledgerTransaction   LedgerTransaction      @relation(fields: [ledgerTransactionId], references: [id], onDelete: Restrict)
+
+  @@unique([userId, idempotencyKey])
+  @@index([investmentId, effectiveDate])
+  @@index([userId, effectiveDate])
+  @@map("investment_activities")
+}
+
+model InvestmentPriceSnapshot {
+  id             String                @id @default(cuid()) @db.VarChar(30)
+  investmentId   String                @map("investment_id") @db.VarChar(30)
+  effectiveDate  DateTime              @map("effective_date") @db.Date
+  unitPrice      Decimal               @map("unit_price") @db.Decimal(18, 8)
+  source         InvestmentPriceSource
+  idempotencyKey String                @map("idempotency_key") @db.VarChar(128)
+  requestHash    String                @map("request_hash") @db.Char(64)
+  createdAt      DateTime              @default(now()) @map("created_at") @db.DateTime(3)
+  investment     Investment            @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+
+  @@unique([investmentId, idempotencyKey])
+  @@index([investmentId, effectiveDate])
+  @@map("investment_price_snapshots")
+}
+
+model InvestmentValuation {
+  id                  String             @id @default(cuid()) @db.VarChar(30)
+  investmentId        String             @map("investment_id") @db.VarChar(30)
+  effectiveDate       DateTime           @map("effective_date") @db.Date
+  currentValue        Decimal            @map("current_value") @db.Decimal(18, 2)
+  ledgerTransactionId String?            @unique @map("ledger_transaction_id") @db.VarChar(30)
+  idempotencyKey      String             @map("idempotency_key") @db.VarChar(128)
+  requestHash         String             @map("request_hash") @db.Char(64)
+  createdAt           DateTime           @default(now()) @map("created_at") @db.DateTime(3)
+  investment          Investment         @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+  ledgerTransaction   LedgerTransaction? @relation(fields: [ledgerTransactionId], references: [id], onDelete: Restrict)
+
+  @@index([investmentId, effectiveDate])
+  @@map("investment_valuations")
 }
 
 model TransactionEntry {

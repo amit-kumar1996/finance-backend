@@ -26,6 +26,16 @@ When recording an EMI, enter its total along with the principal and interest por
 
 The API routes are `GET/POST /api/v1/loans`, `POST /api/v1/loans/:loanId/payments`, and `POST /api/v1/loans/:loanId/prepayments`. Local development applies the loan migration through `npm.cmd run dev` or `npm.cmd run db:deploy`.
 
+## Investments and market data
+
+The Investments page separates NPS, mutual funds, and stocks from FD, PPF, and EPF. Purchases and fixed-product contributions debit an investment asset and credit the selected bank, cash, or UPI asset. They are not expenses. Sells credit the investment asset, debit the receiving account, and recognize realized gain or loss; the market value reserve is reclassified when a position is sold. Market holdings use FIFO cost basis. Fixed-product balances use explicit dated valuations. All rupee postings use decimal amounts and are audited and idempotent.
+
+Mutual fund NAV refresh downloads AMFI's published NAV text report and matches the investment's scheme code. AMFI describes daily NAV publication and provides latest and historical NAV downloads at [NAV Download](https://www.amfiindia.com/net-asset-value/nav-download) and [NAV History](https://www.amfiindia.com/net-asset-value/nav-history). The API records the NAV date/source, and displays stale data when the latest date is more than five days old. Failed downloads leave the last saved value intact and return an error.
+
+NPS and stock prices currently require a dated manual quote. No exchange or NPS credentials are configured, and no prices are fabricated. `MarketDataAdapter` is the provider boundary; AMFI implements it. One stock-market provider option is Angel One [SmartAPI](https://smartapi.angelone.in/docs), which documents quote endpoints and requires an API key and an authenticated Angel One account. A future adapter would also need provider-specific symbol/token mapping and must comply with the account's market-data terms. Keep any API keys on the backend VM, never in the web build. NPS holdings remain manual unless the account's record keeper offers an authorized data feed.
+
+Use the page's **Refresh AMFI NAV** button to update mutual funds. For stocks or NPS, use **Record → Manual unit price** and enter the quote date. For FD, PPF, and EPF, record dated contributions/withdrawals and use **Manual total valuation** when their current value changes. New mutual fund records require the AMFI scheme code; new stock records require the market symbol. The routes are under `/api/v1/investments`; local development applies the investment migration through `npm.cmd run dev` or `npm.cmd run db:deploy`.
+
 Run `npm.cmd run lint`, `npm.cmd run type-check`, and `npm.cmd test` for the API checks. `npm.cmd run build` compiles the production server.
 
 The Compose credentials are local development values only. Production credentials belong in the VM's environment and must not be copied into this repository.
