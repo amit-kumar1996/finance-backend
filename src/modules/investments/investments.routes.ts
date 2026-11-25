@@ -18,6 +18,19 @@ import {
   tradeSchema,
 } from "./investments.schemas.js";
 import type { InvestmentsService } from "./investments.service.js";
+import { calculateXirr } from "./investments.math.js";
+
+const todayInKolkata = (): string => {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const value = (part: "year" | "month" | "day") =>
+    parts.find((entry) => entry.type === part)?.value ?? "";
+  return `${value("year")}-${value("month")}-${value("day")}`;
+};
 
 const readIdempotencyKey = (value: string | undefined): string => {
   if (!value || value.length > 128 || !/^[\w.:~-]+$/.test(value))
@@ -43,8 +56,25 @@ export const createInvestmentsRouter = (
 
   router.get("/investments", authenticated, fullSession, async (request, response) => {
     const { type } = investmentQuerySchema.parse(request.query);
+    const investments = await service.list(request.auth!.session.userId, type);
+    const mutualFundFlows = investments
+      .filter((investment) => investment.investmentType === "MUTUAL_FUND")
+      .flatMap((investment) => [
+        ...investment.activities.map((activity) => ({
+          date: activity.effectiveDate,
+          amount: ["BUY", "CONTRIBUTION"].includes(activity.type)
+            ? `-${activity.amount}`
+            : activity.amount,
+        })),
+        ...(investment.currentValue !== "0.00"
+          ? [{ date: todayInKolkata(), amount: investment.currentValue }]
+          : []),
+      ]);
     response.json({
-      data: { investments: await service.list(request.auth!.session.userId, type) },
+      data: {
+        investments,
+        mutualFundXirr: calculateXirr(mutualFundFlows),
+      },
     });
   });
 
