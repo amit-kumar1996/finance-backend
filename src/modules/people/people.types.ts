@@ -1,6 +1,5 @@
-import type { LedgerTransactionRecord } from "../accounts/accounts.types.js";
-
 export type PersonMovement = "GIVE" | "RECEIVE" | "BORROW" | "REPAY";
+export type PersonPaymentMethod = "CASH" | "UPI" | "CARD";
 
 export interface PersonSummary {
   id: string;
@@ -20,8 +19,6 @@ export interface PersonSummary {
 }
 
 export interface PersonRecord extends PersonSummary {
-  receivableLedgerAccountId: string;
-  payableLedgerAccountId: string;
   archivedAt: Date | null;
 }
 
@@ -29,11 +26,12 @@ export interface PersonStatementRow {
   id: string;
   effectiveDate: string;
   description: string;
-  movement: PersonMovement | "REVERSAL";
+  movement: PersonMovement;
+  paymentMethod: PersonPaymentMethod;
   amount: string;
   netEffect: "INCREASED" | "DECREASED";
   runningNetBalance: string;
-  reversalOfId: string | null;
+  reversalOfId: null;
 }
 
 export interface PersonStatement {
@@ -55,6 +53,27 @@ export interface IdempotentPersonResource {
   requestHash: string;
 }
 
+export interface PersonMovementInput {
+  userId: string;
+  personId: string;
+  idempotencyKey: string;
+  effectiveDate: string;
+  movement: PersonMovement;
+  paymentMethod: PersonPaymentMethod;
+  amount: string;
+  note?: string;
+}
+
+export interface PersonMovementRecord {
+  id: string;
+  requestHash: string;
+}
+
+export interface PersonMovementResult {
+  person: PersonSummary;
+  transaction: { id: string };
+}
+
 export interface PeopleRepository {
   listPeople(userId: string): Promise<PersonSummary[]>;
   getPerson(
@@ -67,23 +86,12 @@ export interface PeopleRepository {
     userId: string,
     key: string,
   ): Promise<IdempotentPersonResource | null>;
+  findMovementByIdempotency(
+    userId: string,
+    key: string,
+  ): Promise<PersonMovementRecord | null>;
+  createMovement(input: PersonMovementInput & { requestHash: string }): Promise<string>;
   createPerson(input: PersonMutationInput): Promise<string>;
   updatePerson(input: PersonMutationInput): Promise<string>;
   archivePerson(input: Omit<PersonMutationInput, "name" | "notes">): Promise<string>;
-}
-
-export interface PersonMovementInput {
-  userId: string;
-  personId: string;
-  idempotencyKey: string;
-  effectiveDate: string;
-  movement: PersonMovement;
-  amount: string;
-  accountId: string;
-  note?: string;
-}
-
-export interface PersonMovementResult {
-  person: PersonSummary;
-  transaction: LedgerTransactionRecord;
 }

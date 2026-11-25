@@ -2,11 +2,12 @@ import { randomBytes } from "node:crypto";
 import type { PrismaClient } from "../../generated/prisma/client.js";
 import { Prisma } from "../../generated/prisma/client.js";
 import { HttpError } from "../../lib/http-error.js";
-import type { LedgerTransactionSource } from "../accounts/accounts.types.js";
 import type {
   IdempotentPersonResource,
   PeopleRepository,
   PersonMovement,
+  PersonMovementInput,
+  PersonMovementRecord,
   PersonMutationInput,
   PersonRecord,
   PersonStatement,
@@ -14,29 +15,21 @@ import type {
   PersonSummary,
 } from "./people.types.js";
 
-const movementBySource: Partial<Record<LedgerTransactionSource, PersonMovement>> = {
-  PERSON_GIVE: "GIVE",
-  PERSON_RECEIVE: "RECEIVE",
-  PERSON_BORROW: "BORROW",
-  PERSON_REPAY: "REPAY",
+const toDateString = (date: Date): string => date.toISOString().slice(0, 10);
+const movementDelta = (movement: PersonMovement, amount: Prisma.Decimal) => {
+  switch (movement) {
+    case "GIVE":
+      return amount;
+    case "RECEIVE":
+      return amount.negated();
+    case "BORROW":
+      return amount.negated();
+    case "REPAY":
+      return amount;
+  }
 };
 
-const toDateString = (date: Date): string => date.toISOString().slice(0, 10);
-
-const transactionSources: LedgerTransactionSource[] = [
-  "PERSON_GIVE",
-  "PERSON_RECEIVE",
-  "PERSON_BORROW",
-  "PERSON_REPAY",
-  "REVERSAL",
-];
-
-type PersonWithAccounts = Prisma.PersonGetPayload<{
-  include: {
-    receivableAccount: { select: { id: true } };
-    payableAccount: { select: { id: true } };
-  };
-}>;
+type PersonRow = Prisma.PersonGetPayload<Record<string, never>>;
 
 export class PrismaPeopleRepository implements PeopleRepository {
   constructor(private readonly prisma: PrismaClient) {}
@@ -44,10 +37,6 @@ export class PrismaPeopleRepository implements PeopleRepository {
   async listPeople(userId: string): Promise<PersonSummary[]> {
     const people = await this.prisma.person.findMany({
       where: { userId, archivedAt: null },
-      include: {
-        receivableAccount: { select: { id: true } },
-        payableAccount: { select: { id: true } },
-      },
       orderBy: [{ name: "asc" }, { createdAt: "asc" }],
     });
     return Promise.all(people.map((person) => this.summarize(person)));
@@ -60,82 +49,34 @@ export class PrismaPeopleRepository implements PeopleRepository {
   ): Promise<PersonRecord | null> {
     const person = await this.prisma.person.findFirst({
       where: { userId, id: personId, ...(includeArchived ? {} : { archivedAt: null }) },
-      include: {
-        receivableAccount: { select: { id: true } },
-        payableAccount: { select: { id: true } },
-      },
     });
     return person ? this.summarize(person) : null;
   }
 
   async getStatement(userId: string, personId: string): Promise<PersonStatement | null> {
-    const person = await this.prisma.person.findFirst({
-      where: { userId, id: personId },
-      include: {
-        receivableAccount: { select: { id: true } },
-        payableAccount: { select: { id: true } },
-      },
-    });
+    const person = await this.prisma.person.findFirst({ where: { userId, id: personId } });
     if (!person) return null;
-    const transactions = await this.prisma.ledgerTransaction.findMany({
-      where: {
-        userId,
-        source: { in: transactionSources },
-        entries: {
-          some: {
-            ledgerAccountId: {
-              in: [person.receivableAccountId, person.payableAccountId],
-            },
-          },
-        },
-      },
-      select: {
-        id: true,
-        effectiveDate: true,
-        createdAt: true,
-        description: true,
-        source: true,
-        reversalOfId: true,
-        entries: {
-          where: {
-            ledgerAccountId: {
-              in: [person.receivableAccountId, person.payableAccountId],
-            },
-          },
-          select: { ledgerAccountId: true, debitAmount: true, creditAmount: true },
-        },
-      },
+    const transactions = await this.prisma.personTransaction.findMany({
+      where: { userId, personId },
       orderBy: [{ effectiveDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
     });
     let runningNetBalance = new Prisma.Decimal(0);
     const statementRows: PersonStatementRow[] = transactions.map((transaction) => {
-      let netDelta = new Prisma.Decimal(0);
-      for (const entry of transaction.entries) {
-        const debit = entry.debitAmount;
-        const credit = entry.creditAmount;
-        const entryDelta =
-          entry.ledgerAccountId === person.receivableAccountId
-            ? debit.minus(credit)
-            : credit.minus(debit);
-        netDelta = netDelta.plus(
-          entry.ledgerAccountId === person.receivableAccountId
-            ? entryDelta
-            : entryDelta.negated(),
-        );
-      }
+      const amount = transaction.amount;
+      const netDelta = movementDelta(transaction.movement, amount);
       runningNetBalance = runningNetBalance.plus(netDelta);
       return {
         id: transaction.id,
         effectiveDate: toDateString(transaction.effectiveDate),
-        description: transaction.description,
-        movement:
-          transaction.source === "REVERSAL"
-            ? "REVERSAL"
-            : movementBySource[transaction.source]!,
-        amount: netDelta.abs().toFixed(2),
+        description: transaction.note?.trim()
+          ? `${transaction.movement}: ${person.name} — ${transaction.note.trim()}`
+          : `${transaction.movement}: ${person.name}`,
+        movement: transaction.movement,
+        paymentMethod: transaction.paymentMethod,
+        amount: amount.toFixed(2),
         netEffect: netDelta.gte(0) ? "INCREASED" : "DECREASED",
         runningNetBalance: runningNetBalance.toFixed(2),
-        reversalOfId: transaction.reversalOfId,
+        reversalOfId: null,
       };
     });
     return {
@@ -154,41 +95,70 @@ export class PrismaPeopleRepository implements PeopleRepository {
     });
   }
 
+  findMovementByIdempotency(
+    userId: string,
+    key: string,
+  ): Promise<PersonMovementRecord | null> {
+    return this.prisma.personTransaction.findFirst({
+      where: { userId, idempotencyKey: key },
+      select: { id: true, requestHash: true },
+    });
+  }
+
+  async createMovement(
+    input: PersonMovementInput & { requestHash: string },
+  ): Promise<string> {
+    return this.prisma.$transaction(async (tx) => {
+      const person = await tx.person.findFirst({
+        where: { id: input.personId, userId: input.userId, archivedAt: null },
+        select: { id: true },
+      });
+      if (!person) throw this.personNotFound();
+      const transaction = await tx.personTransaction.create({
+        data: {
+          userId: input.userId,
+          personId: input.personId,
+          movement: input.movement,
+          paymentMethod: input.paymentMethod,
+          effectiveDate: new Date(`${input.effectiveDate}T00:00:00.000Z`),
+          amount: new Prisma.Decimal(input.amount),
+          note: input.note?.trim() || null,
+          idempotencyKey: input.idempotencyKey,
+          requestHash: input.requestHash,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: input.userId,
+          entityType: "PERSON_TRANSACTION",
+          entityId: transaction.id,
+          action: "PERSON_MOVEMENT_CREATED",
+          changes: {
+            personId: input.personId,
+            movement: input.movement,
+            paymentMethod: input.paymentMethod,
+            effectiveDate: input.effectiveDate,
+            amount: input.amount,
+            note: input.note?.trim() || null,
+          },
+        },
+      });
+      return transaction.id;
+    });
+  }
+
   createPerson(input: PersonMutationInput): Promise<string> {
     return this.prisma.$transaction(async (tx) => {
       const existing = await tx.idempotencyRecord.findFirst({
         where: { userId: input.userId, key: input.idempotencyKey },
       });
       if (existing) return this.requireMatchingRecord(existing, input.requestHash);
-      const personId = randomBytes(12).toString("base64url");
-      const receivableAccount = await tx.ledgerAccount.create({
-        data: {
-          userId: input.userId,
-          code: `PERSON_REC_${personId}`,
-          name: `${input.name} receivable`,
-          category: "ASSET",
-          normalBalance: "DEBIT",
-          isSystem: false,
-        },
-      });
-      const payableAccount = await tx.ledgerAccount.create({
-        data: {
-          userId: input.userId,
-          code: `PERSON_PAY_${personId}`,
-          name: `${input.name} payable`,
-          category: "LIABILITY",
-          normalBalance: "CREDIT",
-          isSystem: false,
-        },
-      });
       const person = await tx.person.create({
         data: {
-          id: personId,
+          id: randomBytes(12).toString("base64url"),
           userId: input.userId,
           name: input.name,
           notes: input.notes,
-          receivableAccountId: receivableAccount.id,
-          payableAccountId: payableAccount.id,
         },
       });
       await tx.auditLog.create({
@@ -219,14 +189,6 @@ export class PrismaPeopleRepository implements PeopleRepository {
         where: { id: current.id },
         data: { name: input.name, notes: input.notes },
       });
-      await tx.ledgerAccount.update({
-        where: { id: current.receivableAccountId },
-        data: { name: `${input.name} receivable` },
-      });
-      await tx.ledgerAccount.update({
-        where: { id: current.payableAccountId },
-        data: { name: `${input.name} payable` },
-      });
       await tx.auditLog.create({
         data: {
           userId: input.userId,
@@ -252,27 +214,26 @@ export class PrismaPeopleRepository implements PeopleRepository {
           where: { id: input.personId ?? "", userId: input.userId, archivedAt: null },
         });
         if (!person) throw this.personNotFound();
-        const accountIds = [person.receivableAccountId, person.payableAccountId].sort();
-        await tx.$queryRaw<Array<{ id: string }>>(
-          Prisma.sql`SELECT id FROM ledger_accounts
-          WHERE user_id = ${input.userId} AND id IN (${Prisma.join(accountIds)})
-          ORDER BY id FOR UPDATE`,
-        );
-        const sums = await tx.transactionEntry.groupBy({
-          by: ["ledgerAccountId"],
-          where: { ledgerAccountId: { in: accountIds } },
-          _sum: { debitAmount: true, creditAmount: true },
+        const transactions = await tx.personTransaction.findMany({
+          where: { userId: input.userId, personId: person.id },
+          select: { movement: true, amount: true },
         });
-        const balanceFor = (accountId: string, normal: "DEBIT" | "CREDIT") => {
-          const item = sums.find((sum) => sum.ledgerAccountId === accountId);
-          const debits = item?._sum.debitAmount ?? new Prisma.Decimal(0);
-          const credits = item?._sum.creditAmount ?? new Prisma.Decimal(0);
-          return normal === "DEBIT" ? debits.minus(credits) : credits.minus(debits);
-        };
-        if (
-          !balanceFor(person.receivableAccountId, "DEBIT").isZero() ||
-          !balanceFor(person.payableAccountId, "CREDIT").isZero()
-        ) {
+        const balances = transactions.reduce(
+          (total, transaction) => {
+            if (transaction.movement === "GIVE") {
+              total.receivable = total.receivable.plus(transaction.amount);
+            } else if (transaction.movement === "RECEIVE") {
+              total.receivable = total.receivable.minus(transaction.amount);
+            } else if (transaction.movement === "BORROW") {
+              total.payable = total.payable.plus(transaction.amount);
+            } else {
+              total.payable = total.payable.minus(transaction.amount);
+            }
+            return total;
+          },
+          { receivable: new Prisma.Decimal(0), payable: new Prisma.Decimal(0) },
+        );
+        if (!balances.receivable.isZero() || !balances.payable.isZero()) {
           throw new HttpError(
             409,
             "PERSON_HAS_OPEN_BALANCE",
@@ -299,36 +260,12 @@ export class PrismaPeopleRepository implements PeopleRepository {
     );
   }
 
-  private async summarize(person: PersonWithAccounts): Promise<PersonRecord> {
-    const transactions = await this.prisma.ledgerTransaction.findMany({
-      where: {
-        userId: person.userId,
-        source: { in: transactionSources },
-        entries: {
-          some: {
-            ledgerAccountId: {
-              in: [person.receivableAccountId, person.payableAccountId],
-            },
-          },
-        },
-      },
-      select: {
-        id: true,
-        source: true,
-        reversalOfId: true,
-        entries: {
-          where: {
-            ledgerAccountId: {
-              in: [person.receivableAccountId, person.payableAccountId],
-            },
-          },
-          select: { ledgerAccountId: true, debitAmount: true, creditAmount: true },
-        },
-      },
-    });
-    const transactionById = new Map(
-      transactions.map((transaction) => [transaction.id, transaction]),
-    );
+  private async summarize(person: PersonRow): Promise<PersonRecord> {
+    const transactions = (await this.prisma.personTransaction.findMany({
+      where: { userId: person.userId, personId: person.id },
+      select: { movement: true, amount: true },
+      orderBy: [{ effectiveDate: "asc" }, { createdAt: "asc" }, { id: "asc" }],
+    })) as Array<{ movement: PersonMovement; amount: Prisma.Decimal }>;
     const totals = {
       given: new Prisma.Decimal(0),
       received: new Prisma.Decimal(0),
@@ -338,51 +275,39 @@ export class PrismaPeopleRepository implements PeopleRepository {
       payable: new Prisma.Decimal(0),
     };
     for (const transaction of transactions) {
-      let receivableDelta = new Prisma.Decimal(0);
-      let payableDelta = new Prisma.Decimal(0);
-      for (const entry of transaction.entries) {
-        const delta = entry.debitAmount.minus(entry.creditAmount);
-        if (entry.ledgerAccountId === person.receivableAccountId) {
-          receivableDelta = receivableDelta.plus(delta);
-        } else {
-          payableDelta = payableDelta.minus(delta);
-        }
-      }
-      totals.receivable = totals.receivable.plus(receivableDelta);
-      totals.payable = totals.payable.plus(payableDelta);
-      const original =
-        transaction.source === "REVERSAL" && transaction.reversalOfId
-          ? transactionById.get(transaction.reversalOfId)
-          : undefined;
-      const movement = original
-        ? movementBySource[original.source]
-        : movementBySource[transaction.source];
-      if (movement) {
-        const sign = original ? -1 : 1;
-        const target = {
-          GIVE: "given",
-          RECEIVE: "received",
-          BORROW: "borrowed",
-          REPAY: "repaid",
-        }[movement] as "given" | "received" | "borrowed" | "repaid";
-        totals[target] = totals[target].plus(
-          receivableDelta.abs().plus(payableDelta.abs()).mul(sign),
-        );
+      switch (transaction.movement) {
+        case "GIVE":
+          totals.given = totals.given.plus(transaction.amount);
+          totals.receivable = totals.receivable.plus(transaction.amount);
+          break;
+        case "RECEIVE":
+          totals.received = totals.received.plus(transaction.amount);
+          totals.receivable = totals.receivable.minus(transaction.amount);
+          break;
+        case "BORROW":
+          totals.borrowed = totals.borrowed.plus(transaction.amount);
+          totals.payable = totals.payable.plus(transaction.amount);
+          break;
+        case "REPAY":
+          totals.repaid = totals.repaid.plus(transaction.amount);
+          totals.payable = totals.payable.minus(transaction.amount);
+          break;
       }
     }
     const net = totals.receivable.minus(totals.payable);
-    const hasGiven =
-      !totals.given.isZero() || !totals.received.isZero() || !totals.receivable.isZero();
-    const hasBorrowed =
-      !totals.borrowed.isZero() || !totals.repaid.isZero() || !totals.payable.isZero();
-    const type =
-      hasGiven && hasBorrowed
-        ? "Both"
-        : hasBorrowed
-          ? "Borrowed"
-          : hasGiven
-            ? "Given"
-            : "—";
+    const hasGiven = transactions.some(
+      ({ movement }) => movement === "GIVE" || movement === "RECEIVE",
+    );
+    const hasBorrowed = transactions.some(
+      ({ movement }) => movement === "BORROW" || movement === "REPAY",
+    );
+    const type = hasGiven && hasBorrowed
+      ? "Both"
+      : hasBorrowed
+        ? "Borrowed"
+        : hasGiven
+          ? "Given"
+          : "—";
     const givenOrBorrowed = totals.given.plus(totals.borrowed);
     const receivedOrRepaid = totals.received.plus(totals.repaid);
     return {
@@ -391,8 +316,6 @@ export class PrismaPeopleRepository implements PeopleRepository {
       notes: person.notes,
       createdAt: person.createdAt,
       archivedAt: person.archivedAt,
-      receivableLedgerAccountId: person.receivableAccountId,
-      payableLedgerAccountId: person.payableAccountId,
       givenTotal: totals.given.toFixed(2),
       receivedTotal: totals.received.toFixed(2),
       borrowedTotal: totals.borrowed.toFixed(2),

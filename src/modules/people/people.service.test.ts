@@ -1,5 +1,4 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AccountsService } from "../accounts/accounts.service.js";
 import type { PeopleRepository, PersonRecord } from "./people.types.js";
 import { PeopleService } from "./people.service.js";
 
@@ -19,8 +18,6 @@ const person: PersonRecord = {
   type: "Given",
   givenOrBorrowed: "0.00",
   receivedOrRepaid: "0.00",
-  receivableLedgerAccountId: "receivable-b",
-  payableLedgerAccountId: "payable-b",
 };
 
 const makeService = () => {
@@ -31,14 +28,13 @@ const makeService = () => {
       userId === "user-b" ? { person, transactions: [] } : null,
     ),
     findIdempotencyRecord: vi.fn(async () => null),
+    findMovementByIdempotency: vi.fn(async () => null),
+    createMovement: vi.fn(async () => "movement-1"),
     createPerson: vi.fn(async () => person.id),
     updatePerson: vi.fn(async () => person.id),
     archivePerson: vi.fn(async () => person.id),
   };
-  const accounts = {
-    postPersonMovement: vi.fn(),
-  } as unknown as AccountsService;
-  return { service: new PeopleService(repository, accounts), repository, accounts };
+  return { service: new PeopleService(repository), repository };
 };
 
 describe("people ownership", () => {
@@ -53,7 +49,7 @@ describe("people ownership", () => {
   });
 
   it("does not let user A update, archive, or post to user B's person", async () => {
-    const { service, repository, accounts } = makeService();
+    const { service, repository } = makeService();
     await expect(
       service.updatePerson("user-a", person.id, "update-a", { name: "Changed" }),
     ).rejects.toMatchObject({ code: "PERSON_NOT_FOUND" });
@@ -68,13 +64,41 @@ describe("people ownership", () => {
         personId: person.id,
         idempotencyKey: "give-a",
         movement: "GIVE",
+        paymentMethod: "CASH",
         effectiveDate: "2026-11-24",
         amount: "10.00",
-        accountId: "bank-a",
       }),
     ).rejects.toMatchObject({ code: "PERSON_NOT_FOUND" });
     expect(repository.updatePerson).not.toHaveBeenCalled();
     expect(repository.archivePerson).not.toHaveBeenCalled();
-    expect(accounts.postPersonMovement).not.toHaveBeenCalled();
+    expect(repository.createMovement).not.toHaveBeenCalled();
+  });
+
+  it("keeps person movements in the separate tracker and summarizes with decimal strings", async () => {
+    const { service, repository } = makeService();
+    vi.mocked(repository.listPeople).mockResolvedValue([
+      { ...person, receivableBalance: "10000.00", payableBalance: "5000.00" },
+    ]);
+    const result = await service.postMovement({
+      userId: "user-b",
+      personId: person.id,
+      idempotencyKey: "give-1",
+      movement: "GIVE",
+      paymentMethod: "UPI",
+      effectiveDate: "2026-11-24",
+      amount: "10000.00",
+    });
+    const summary = await service.trackerSummary("user-b");
+
+    expect(result.transaction.id).toBe("movement-1");
+    expect(repository.createMovement).toHaveBeenCalledWith(
+      expect.objectContaining({ paymentMethod: "UPI", amount: "10000.00" }),
+    );
+    expect(summary).toEqual({
+      receivable: "10000.00",
+      payable: "5000.00",
+      net: "5000.00",
+      peopleCount: 1,
+    });
   });
 });

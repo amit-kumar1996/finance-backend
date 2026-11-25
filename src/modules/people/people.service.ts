@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
+import { Prisma } from "../../generated/prisma/client.js";
 import { HttpError } from "../../lib/http-error.js";
-import type { AccountsService } from "../accounts/accounts.service.js";
 import type {
   IdempotentPersonResource,
   PeopleRepository,
@@ -21,13 +21,28 @@ const isUniqueConstraintError = (error: unknown): boolean =>
   error.code === "P2002";
 
 export class PeopleService {
-  constructor(
-    private readonly repository: PeopleRepository,
-    private readonly accounts: AccountsService,
-  ) {}
+  constructor(private readonly repository: PeopleRepository) {}
 
   listPeople(userId: string): Promise<PersonSummary[]> {
     return this.repository.listPeople(userId);
+  }
+
+  async trackerSummary(userId: string) {
+    const people = await this.repository.listPeople(userId);
+    const receivable = people.reduce(
+      (total, person) => total.plus(person.receivableBalance),
+      new Prisma.Decimal(0),
+    );
+    const payable = people.reduce(
+      (total, person) => total.plus(person.payableBalance),
+      new Prisma.Decimal(0),
+    );
+    return {
+      receivable: receivable.toFixed(2),
+      payable: payable.toFixed(2),
+      net: receivable.minus(payable).toFixed(2),
+      peopleCount: people.length,
+    };
   }
 
   async getPerson(userId: string, personId: string): Promise<PersonSummary> {
@@ -125,31 +140,57 @@ export class PeopleService {
   }
 
   async postMovement(input: PersonMovementInput): Promise<PersonMovementResult> {
-    const person = await this.repository.getPerson(input.userId, input.personId, true);
-    if (!person) throw this.personNotFound();
-    const personLedgerAccountId =
-      input.movement === "GIVE" || input.movement === "RECEIVE"
-        ? person.receivableLedgerAccountId
-        : person.payableLedgerAccountId;
-    const description = input.note?.trim()
-      ? `${input.movement}: ${person.name} — ${input.note.trim()}`
-      : `${input.movement}: ${person.name}`;
-    const transaction = await this.accounts.postPersonMovement(
+    const requestHash = hashRequest({
+      operation: "PERSON_MOVEMENT",
+      personId: input.personId,
+      movement: input.movement,
+      paymentMethod: input.paymentMethod,
+      effectiveDate: input.effectiveDate,
+      amount: input.amount,
+      note: input.note?.trim() || null,
+    });
+    const existing = await this.repository.findMovementByIdempotency(
       input.userId,
       input.idempotencyKey,
-      {
-        movement: input.movement,
-        personId: input.personId,
-        personLedgerAccountId,
-        accountId: input.accountId,
-        effectiveDate: input.effectiveDate,
-        amount: input.amount,
-        description,
-      },
     );
-    const updatedPerson = await this.repository.getPerson(input.userId, person.id, true);
+    if (existing) {
+      if (existing.requestHash !== requestHash) {
+        throw new HttpError(
+          409,
+          "IDEMPOTENCY_KEY_REUSED",
+          "This idempotency key was already used for different data.",
+        );
+      }
+      return {
+        person: await this.personForResource(input.userId, input.personId),
+        transaction: { id: existing.id },
+      };
+    }
+    if (!(await this.repository.getPerson(input.userId, input.personId, true))) {
+      throw this.personNotFound();
+    }
+    let transactionId: string;
+    try {
+      transactionId = await this.repository.createMovement({ ...input, requestHash });
+    } catch (error) {
+      if (!isUniqueConstraintError(error)) throw error;
+      const raced = await this.repository.findMovementByIdempotency(
+        input.userId,
+        input.idempotencyKey,
+      );
+      if (!raced) throw error;
+      if (raced.requestHash !== requestHash) {
+        throw new HttpError(
+          409,
+          "IDEMPOTENCY_KEY_REUSED",
+          "This idempotency key was already used for different data.",
+        );
+      }
+      transactionId = raced.id;
+    }
+    const updatedPerson = await this.repository.getPerson(input.userId, input.personId, true);
     if (!updatedPerson) throw this.personNotFound();
-    return { person: this.publicPerson(updatedPerson), transaction };
+    return { person: this.publicPerson(updatedPerson), transaction: { id: transactionId } };
   }
 
   private async findIdempotent(
@@ -175,12 +216,7 @@ export class PeopleService {
   }
 
   private publicPerson(person: PersonRecord): PersonSummary {
-    const {
-      receivableLedgerAccountId: _receivableLedgerAccountId,
-      payableLedgerAccountId: _payableLedgerAccountId,
-      archivedAt: _archivedAt,
-      ...summary
-    } = person;
+    const { archivedAt: _archivedAt, ...summary } = person;
     return summary;
   }
 

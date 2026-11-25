@@ -122,7 +122,7 @@ export class SyncService {
         personId: input.personId,
         effectiveDate: input.effectiveDate,
         amount: input.amount,
-        accountId: input.accountId,
+        paymentMethod: input.paymentMethod,
         ...(input.note ? { note: input.note } : {}),
       });
     }

@@ -484,9 +484,9 @@ export class PrismaAccountsRepository implements AccountsRepository {
           });
           if (
             !activePerson ||
-            ![activePerson.receivableAccountId, activePerson.payableAccountId].some(
-              (id) => orderedLedgerAccountIds.includes(id),
-            )
+            ![activePerson.receivableAccountId, activePerson.payableAccountId]
+              .filter((id): id is string => id !== null)
+              .some((id) => orderedLedgerAccountIds.includes(id))
           ) {
             throw new HttpError(404, "PERSON_NOT_FOUND", "The person was not found.");
           }

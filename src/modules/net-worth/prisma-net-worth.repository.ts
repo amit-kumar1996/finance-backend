@@ -32,7 +32,11 @@ export class PrismaNetWorthRepository implements NetWorthRepository {
 
   async getPosition(userId: string, asOfDate: string): Promise<NetWorthPosition> {
     const accounts = await this.prisma.ledgerAccount.findMany({
-      where: { userId },
+      where: {
+        userId,
+        personReceivable: { is: null },
+        personPayable: { is: null },
+      },
       include: {
         financialAccount: { select: { accountType: true } },
         investment: { select: { investmentType: true } },

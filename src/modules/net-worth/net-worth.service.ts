@@ -1,6 +1,7 @@
 import { Prisma } from "../../generated/prisma/client.js";
 import type { InvestmentsService } from "../investments/investments.service.js";
 import type { LoansService } from "../loans/loans.service.js";
+import type { PeopleService } from "../people/people.service.js";
 import type {
   MonthSummary,
   NetWorthHistoryPoint,
@@ -59,18 +60,20 @@ export class NetWorthService {
     private readonly repository: NetWorthRepository,
     private readonly loans: LoansService,
     private readonly investments: InvestmentsService,
+    private readonly people: PeopleService,
   ) {}
 
   async dashboard(userId: string) {
     const today = todayInKolkata();
     const month = today.slice(0, 7);
     const year = Number(today.slice(0, 4));
-    const [position, monthlyRows, history, loanRows, investments] = await Promise.all([
+    const [position, monthlyRows, history, loanRows, investments, peopleTracker] = await Promise.all([
       this.repository.getPosition(userId, today),
       this.repository.listMonthlySummaries(userId, year),
       this.repository.listSnapshots(userId, monthsBefore(today, 5), today),
       this.loans.list(userId),
       this.investments.list(userId),
+      this.people.trackerSummary(userId),
     ]);
     const currentMonth: MonthSummary = monthlyRows.find((row) => row.month === month) ?? {
       month,
@@ -119,11 +122,10 @@ export class NetWorthService {
       whereMoneyStands: {
         cash: assetValue("cash"),
         investments: assetValue("investment"),
-        receivables: assetValue("receivable"),
         loans: liabilityValue("loan"),
         creditCards: liabilityValue("creditCard"),
-        payables: liabilityValue("peoplePayable"),
       },
+      peopleTracker,
       month: currentMonth,
       history: latestPointPerMonth(addCurrentPoint(history, position)).slice(-6),
       upcoming,

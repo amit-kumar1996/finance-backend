@@ -46,10 +46,7 @@ const authService = new AuthService(
   authConfig,
 );
 const accountsService = new AccountsService(new PrismaAccountsRepository(prisma));
-const peopleService = new PeopleService(
-  new PrismaPeopleRepository(prisma),
-  accountsService,
-);
+const peopleService = new PeopleService(new PrismaPeopleRepository(prisma));
 const expensesService = new ExpensesService(
   new PrismaExpensesRepository(prisma),
   accountsService,
@@ -63,6 +60,7 @@ const netWorthService = new NetWorthService(
   new PrismaNetWorthRepository(prisma),
   loansService,
   investmentsService,
+  peopleService,
 );
 
 const app = createApp(

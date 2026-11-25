@@ -12,9 +12,9 @@ export const updatePersonSchema = createPersonSchema;
 
 export const personMovementSchema = z.object({
   movement: z.enum(["GIVE", "RECEIVE", "BORROW", "REPAY"]),
+  paymentMethod: z.enum(["CASH", "UPI", "CARD"]),
   personId: z.string().min(1).max(30),
   effectiveDate: dateString,
   amount: z.string().regex(/^(?:0|[1-9]\d{0,15})(?:\.\d{1,4})?$/),
-  accountId: z.string().min(1).max(30),
   note: z.string().trim().max(250).optional(),
 });
